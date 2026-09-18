@@ -374,6 +374,249 @@ PAGE_HEAD = """<!doctype html>
 
 </html>"""
 
+UPLOAD_SUCCESS_PAGE = """<!doctype html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f3f7fa">
+  <title>上传完成 - PyDrop</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --text: #1e3445;
+      --muted: #617582;
+      --accent: #087e8b;
+      --accent-dark: #05626d;
+      --border: #e1eaf0;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      display: grid;
+      min-height: 100vh;
+      margin: 0;
+      background:
+        radial-gradient(ellipse at 0% 0%, #deeff4 0, transparent 55%),
+        radial-gradient(ellipse at 100% 30%, #e8edf9 0, transparent 50%),
+        #f3f7fa;
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+        "PingFang SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.6;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    main {
+      width: min(100% - 40px, 560px);
+      margin: auto;
+      padding: 32px 0;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 0 0 20px 4px;
+      font-size: 18px;
+      font-weight: 750;
+    }
+
+    .brand-icon {
+      display: grid;
+      place-items: center;
+      width: 36px;
+      height: 36px;
+      border-radius: 12px;
+      background: var(--accent);
+      color: #fff;
+      box-shadow: 0 5px 12px #087e8b20;
+    }
+
+    .icon {
+      width: 21px;
+      height: 21px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .card {
+      padding: 40px;
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      background: #fff;
+      box-shadow: 0 14px 44px #25465b0b;
+      text-align: center;
+    }
+
+    .success-icon {
+      display: grid;
+      place-items: center;
+      width: 72px;
+      height: 72px;
+      margin: 0 auto 20px;
+      border-radius: 50%;
+      background: #e7f6f3;
+      color: #07836f;
+      box-shadow: 0 0 0 8px #f3faf8;
+      animation: arrive 360ms ease-out;
+    }
+
+    .success-icon .icon { width: 34px; height: 34px; stroke-width: 2.2; }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(26px, 7vw, 34px);
+      line-height: 1.3;
+      letter-spacing: -0.6px;
+    }
+
+    .subtitle { margin: 9px 0 26px; color: var(--muted); font-size: 14px; }
+
+    .file-summary {
+      display: flex;
+      align-items: center;
+      gap: 13px;
+      min-width: 0;
+      padding: 15px 16px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: #f8fbfc;
+      text-align: left;
+    }
+
+    .file-icon {
+      display: grid;
+      place-items: center;
+      width: 42px;
+      height: 42px;
+      flex-shrink: 0;
+      border-radius: 11px;
+      background: #e7f2f5;
+      color: var(--accent);
+    }
+
+    .file-details { min-width: 0; flex: 1; }
+
+    .file-name {
+      display: block;
+      font-size: 14px;
+      font-weight: 650;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+
+    .file-meta { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
+
+    .actions { display: flex; gap: 12px; margin-top: 26px; }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 46px;
+      flex: 1;
+      padding: 11px 18px;
+      border: 1px solid #d4e7eb;
+      border-radius: 11px;
+      background: #eff7f9;
+      color: var(--accent-dark);
+      font-size: 14px;
+      font-weight: 650;
+      text-decoration: none;
+      transition: background-color 160ms ease, box-shadow 160ms ease;
+      touch-action: manipulation;
+    }
+
+    .button.primary {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #fff;
+      box-shadow: 0 4px 10px #087e8b18;
+    }
+
+    .button .icon { width: 18px; height: 18px; }
+
+    .button:focus-visible { outline: 3px solid #168998; outline-offset: 4px; }
+
+    .hint { margin: 18px 0 0; color: var(--muted); font-size: 12px; }
+
+    @keyframes arrive {
+      from { opacity: 0; transform: scale(.78); }
+      to { opacity: 1; transform: scale(1); }
+    }
+
+    @media (hover: hover) {
+      .button:hover { background: #deeff3; }
+      .button.primary:hover { background: var(--accent-dark); box-shadow: 0 6px 16px #087e8b26; }
+    }
+
+    .button:active { background: #d1e7ec; }
+    .button.primary:active { background: #044f58; }
+
+    @media (max-width: 480px) {
+      main { width: calc(100% - 28px); padding: 22px 0; }
+      .brand { margin-bottom: 16px; }
+      .card { padding: 32px 20px 26px; border-radius: 20px; }
+      .actions { flex-direction: column; }
+      .button { flex: none; width: 100%; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .success-icon { animation: none; }
+      .button { transition: none; }
+    }
+  </style>
+</head>
+
+<body>
+  <main>
+    <header class="brand">
+      <span class="brand-icon" aria-hidden="true">
+        <svg class="icon" viewBox="0 0 24 24">
+          <path d="M7 16V4m-4 4 4-4 4 4M17 8v12m-4-4 4 4 4-4" />
+        </svg>
+      </span>
+      PyDrop
+    </header>
+    <section class="card" aria-labelledby="success-heading">
+      <div class="success-icon" aria-hidden="true">
+        <svg class="icon" viewBox="0 0 24 24"><path d="m5 12 4.5 4.5L19 7" /></svg>
+      </div>
+      <h1 id="success-heading">上传完成</h1>
+      <p class="subtitle" role="status">文件已安全保存到电脑的共享文件夹</p>
+      <div class="file-summary">
+        <span class="file-icon" aria-hidden="true">
+          <svg class="icon" viewBox="0 0 24 24">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6" />
+          </svg>
+        </span>
+        <span class="file-details">
+          <span class="file-name">{filename}</span>
+          <span class="file-meta">{size} · 已保存</span>
+        </span>
+      </div>
+      <div class="actions">
+        <a class="button primary" href="/">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m9 18-6-6 6-6M3 12h12a6 6 0 0 1 6 6" />
+          </svg>
+          返回首页
+        </a>
+      </div>
+      <p class="hint">现在可以关闭此页面，文件会保留在电脑中</p>
+    </section>
+  </main>
+</body>
+
+</html>"""
+
 
 def local_ip():
     """获取本机用于局域网通信的 IPv4 地址。"""
@@ -867,7 +1110,7 @@ class Handler(BaseHTTPRequestHandler):
         )
         message = BytesParser(policy=default).parsebytes(raw)
 
-        for part in message.iter_attachments():
+        for part in message.iter_parts():
             filename = part.get_filename()
             if not filename:
                 continue
@@ -881,12 +1124,10 @@ class Handler(BaseHTTPRequestHandler):
             target = SHARED_DIR / f"{stem}_{uuid.uuid4().hex[:8]}{suffix}"
             target.write_bytes(part.get_payload(decode=True) or b"")
 
-            message_text = html.escape(f"上传成功！\n保存到：{target}")
-            self.reply(
-                200,
-                "<meta name='viewport' content='width=device-width'>"
-                f"<pre>{message_text}</pre><p><a href='/'>返回文件列表</a></p>",
-            )
+            success_page = UPLOAD_SUCCESS_PAGE.replace(
+                "{filename}", html.escape(target.name)
+            ).replace("{size}", self.format_size(target.stat().st_size))
+            self.reply(200, success_page)
             return
 
         self.send_error(400, "没有找到上传文件")
