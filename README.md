@@ -7,6 +7,7 @@ PyDrop is a lightweight LAN file-transfer tool for computers and phones. It star
 ## Features
 
 - QR code access with a simple Tkinter desktop GUI
+- Copy the access URL and refresh the address and QR code after switching networks
 - Upload files from a phone or another computer
 - Browse and download files from the shared directory
 - Open the shared directory from the desktop app

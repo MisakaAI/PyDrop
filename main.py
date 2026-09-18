@@ -15,6 +15,7 @@ from email.policy import default
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tkinter import filedialog, messagebox
+from tkinter import font as tkfont
 from urllib.parse import quote, unquote, urlsplit
 
 import segno
@@ -216,7 +217,7 @@ def local_ip():
         sock.connect(("8.8.8.8", 80))
         return sock.getsockname()[0]
     except OSError:
-        return "<电脑局域网IP>"
+        return None
     finally:
         sock.close()
 
@@ -243,21 +244,23 @@ def open_shared_dir():
 
 
 class App:
-    QR_SIZE = 320
+    QR_SIZE = 256
 
     def __init__(self):
         self.server = None
         self.server_thread = None
+        self.feedback_job = None
         self.root = tk.Tk()
         self.root.title("PyDrop - 局域网文件互传")
-        self.root.resizable(False, False)
-        self.root.configure(bg="#f4f5f7")
+        self.root.configure(bg="#f3f6fa")
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.set_window_icon()
 
-        self.url = f"http://{local_ip()}:{PORT}"
         self.start_server()
         self.build_ui()
+        self.refresh_address()
+        self.root.update_idletasks()
+        self.root.minsize(self.root.winfo_reqwidth(), self.root.winfo_reqheight())
 
     def set_window_icon(self):
         """使用项目中的 favicon.ico 设置窗口图标。"""
@@ -296,123 +299,232 @@ class App:
         self.server_thread.start()
 
     def build_ui(self):
-        colors = {
-            "background": "#f4f5f7",
+        self.colors = colors = {
+            "background": "#f3f6fa",
             "card": "#ffffff",
-            "text": "#222222",
-            "muted": "#666666",
-            "primary": "#1769aa",
-            "primary_active": "#125589",
-            "border": "#e2e4e8",
+            "text": "#18283b",
+            "muted": "#596b80",
+            "primary": "#2563eb",
+            "primary_active": "#1d4ed8",
+            "border": "#dce4ef",
         }
+        family = tkfont.nametofont("TkDefaultFont").actual("family")
+        self.body_font = (family, 10)
+        self.small_font = (family, 9)
+        heading_font = (family, 11, "bold")
+        self.status = tk.StringVar(self.root)
+        self.address = tk.StringVar(self.root)
+        self.folder_path = tk.StringVar(self.root, value=str(SHARED_DIR))
 
-        content = tk.Frame(self.root, bg=colors["background"], padx=24, pady=22)
-        content.pack()
+        content = tk.Frame(self.root, bg=colors["background"], padx=24, pady=24)
+        content.pack(fill="both", expand=True)
+        content.columnconfigure(1, weight=1)
+        content.rowconfigure(1, weight=1)
+
+        header = tk.Frame(content, bg=colors["background"])
+        header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 20))
+        header.columnconfigure(0, weight=1)
 
         tk.Label(
-            content,
-            text="PyDrop · 局域网文件互传",
+            header,
+            text="PyDrop",
             bg=colors["background"],
             fg=colors["text"],
-            font=("TkDefaultFont", 17, "bold"),
-        ).pack()
+            font=(family, 24, "bold"),
+        ).grid(row=0, column=0, sticky="w")
+        self.connection_label = tk.Label(
+            header,
+            padx=12,
+            pady=6,
+            font=self.small_font,
+        )
+        self.connection_label.grid(row=0, column=1, sticky="e")
         tk.Label(
-            content,
-            text="手机连接同一 Wi-Fi 后，扫描二维码或打开下面的地址",
+            header,
+            text="局域网文件互传 · 手机与电脑连接同一 Wi-Fi 即可使用",
             bg=colors["background"],
             fg=colors["muted"],
-            font=("TkDefaultFont", 10),
-        ).pack(pady=(6, 16))
+            font=self.body_font,
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
-        card = tk.Frame(
+        qr_card = tk.Frame(
             content,
             bg=colors["card"],
             highlightbackground=colors["border"],
             highlightthickness=1,
-            padx=18,
-            pady=18,
+            padx=16,
+            pady=16,
         )
-        card.pack()
+        qr_card.grid(row=1, column=0, sticky="ns", padx=(0, 20))
 
         tk.Label(
-            card,
-            text="扫码访问",
+            qr_card,
+            text="扫码连接",
             bg=colors["card"],
             fg=colors["text"],
-            font=("TkDefaultFont", 12, "bold"),
+            font=heading_font,
         ).pack()
-        tk.Label(
-            card,
-            text="用手机相机扫描二维码即可打开文件页面",
-            bg=colors["card"],
-            fg=colors["muted"],
-            font=("TkDefaultFont", 9),
-        ).pack(pady=(4, 10))
-
-        url_label = tk.Label(
-            card,
-            text=self.url,
-            bg=colors["card"],
-            fg=colors["primary"],
-            cursor="hand2",
-            font=("TkDefaultFont", 10, "underline"),
-        )
-        url_label.pack(pady=(0, 10))
-        url_label.bind("<Button-1>", lambda _event: self.copy_url())
 
         self.qr_canvas = tk.Canvas(
-            card,
+            qr_card,
             width=self.QR_SIZE,
             height=self.QR_SIZE,
             bg="white",
-            highlightthickness=1,
-            highlightbackground=colors["border"],
+            highlightthickness=0,
         )
-        self.qr_canvas.pack()
-        self.draw_qr(self.url)
-
-        button = tk.Button(
-            card,
-            text="打开共享文件夹",
-            command=self.open_folder,
-            bg=colors["primary"],
-            fg="white",
-            activebackground=colors["primary_active"],
-            activeforeground="white",
-            relief="flat",
-            borderwidth=0,
-            cursor="hand2",
-            padx=18,
-            pady=8,
-            font=("TkDefaultFont", 10),
-        )
-        button.pack(pady=(16, 8))
-
-        tk.Button(
-            card,
-            text="选择共享目录",
-            command=self.choose_folder,
-            bg=colors["card"],
-            fg=colors["primary"],
-            activebackground="#edf5fb",
-            activeforeground=colors["primary_active"],
-            relief="solid",
-            borderwidth=1,
-            cursor="hand2",
-            padx=18,
-            pady=6,
-            font=("TkDefaultFont", 10),
-        ).pack(pady=(0, 10))
-
-        self.shared_dir_label = tk.Label(
-            card,
-            text=f"共享目录：{SHARED_DIR}",
+        self.qr_canvas.pack(expand=True, pady=8)
+        tk.Label(
+            qr_card,
+            text="使用手机相机扫描\n在浏览器中上传或下载文件",
             bg=colors["card"],
             fg=colors["muted"],
-            font=("TkDefaultFont", 9),
-            wraplength=400,
+            font=self.small_font,
+            justify="center",
+        ).pack()
+
+        details = tk.Frame(content, bg=colors["background"])
+        details.grid(row=1, column=1, sticky="nsew")
+        details.columnconfigure(0, weight=1)
+
+        tk.Label(
+            details,
+            text="浏览器访问地址",
+            bg=colors["background"],
+            fg=colors["text"],
+            font=heading_font,
+        ).grid(row=0, column=0, sticky="w", pady=(2, 10))
+        self.address_entry = self.readonly_entry(details, self.address)
+        self.address_entry.grid(row=1, column=0, sticky="ew", ipady=8)
+        address_actions = tk.Frame(details, bg=colors["background"])
+        address_actions.grid(row=2, column=0, sticky="w", pady=(10, 24))
+        self.copy_button = self.action_button(
+            address_actions, "复制地址", self.copy_url, primary=True
         )
-        self.shared_dir_label.pack()
+        self.copy_button.pack(side="left", padx=(0, 8))
+        self.action_button(address_actions, "重新检测", self.refresh_address).pack(
+            side="left"
+        )
+
+        tk.Frame(details, bg=colors["border"], height=1).grid(
+            row=3, column=0, sticky="ew", pady=(0, 20)
+        )
+        tk.Label(
+            details,
+            text="共享文件夹",
+            bg=colors["background"],
+            fg=colors["text"],
+            font=heading_font,
+        ).grid(row=4, column=0, sticky="w", pady=(0, 10))
+        self.folder_entry = self.readonly_entry(details, self.folder_path)
+        self.folder_entry.grid(row=5, column=0, sticky="ew", ipady=8)
+        self.folder_entry.xview_moveto(1)
+        tk.Label(
+            details,
+            text="放入文件即可共享，手机上传也会保存到此处。",
+            bg=colors["background"],
+            fg=colors["muted"],
+            font=self.small_font,
+            wraplength=300,
+            justify="left",
+        ).grid(row=6, column=0, sticky="w", pady=(8, 12))
+        folder_actions = tk.Frame(details, bg=colors["background"])
+        folder_actions.grid(row=7, column=0, sticky="w")
+        self.action_button(folder_actions, "打开文件夹", self.open_folder).pack(
+            side="left", padx=(0, 8)
+        )
+        self.action_button(folder_actions, "选择共享目录", self.choose_folder).pack(
+            side="left"
+        )
+        tk.Label(
+            content,
+            textvariable=self.status,
+            bg=colors["background"],
+            fg=colors["muted"],
+            font=self.small_font,
+            anchor="w",
+        ).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(18, 0))
+
+    def readonly_entry(self, parent, variable):
+        """允许选择、复制和水平滚动，避免长地址或路径撑大窗口。"""
+        return tk.Entry(
+            parent,
+            textvariable=variable,
+            state="readonly",
+            width=32,
+            font=self.body_font,
+            fg=self.colors["text"],
+            readonlybackground=self.colors["card"],
+            relief="flat",
+            highlightthickness=1,
+            highlightbackground=self.colors["border"],
+            highlightcolor=self.colors["primary"],
+            selectbackground=self.colors["primary"],
+            selectforeground="white",
+        )
+
+    def action_button(self, parent, text, command, primary=False):
+        button = tk.Button(
+            parent,
+            text=text,
+            command=command,
+            bg=self.colors["primary"] if primary else self.colors["card"],
+            fg="white" if primary else self.colors["primary"],
+            activebackground=self.colors["primary_active"] if primary else "#e6edfa",
+            activeforeground="white" if primary else self.colors["primary_active"],
+            disabledforeground=self.colors["muted"],
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=2,
+            highlightbackground=self.colors["background"],
+            highlightcolor=self.colors["primary"],
+            cursor="hand2",
+            padx=12,
+            pady=8,
+            font=self.body_font,
+            takefocus=True,
+        )
+        button.bind("<Return>", lambda _event: button.invoke())
+        return button
+
+    def refresh_address(self):
+        ip = local_ip()
+        self.url = f"http://{ip}:{PORT}" if ip else ""
+        self.address.set(self.url or "未检测到局域网地址")
+        self.copy_button.config(state="normal" if ip else "disabled")
+        self.connection_label.config(
+            text="● 服务已启动" if ip else "● 请检查网络",
+            fg="#166534" if ip else "#92400e",
+            bg="#e6f4eb" if ip else "#fff1d6",
+        )
+        if ip:
+            self.draw_qr(self.url)
+        else:
+            self.qr_canvas.delete("all")
+            self.qr_canvas.create_text(
+                self.QR_SIZE // 2,
+                self.QR_SIZE // 2,
+                text="连接 Wi-Fi 或网线后\n点击「重新检测」生成二维码",
+                fill=self.colors["muted"],
+                font=self.body_font,
+                width=self.QR_SIZE - 24,
+                justify="center",
+            )
+        self.show_status()
+
+    def show_status(self, message=None):
+        if self.feedback_job is not None:
+            self.root.after_cancel(self.feedback_job)
+            self.feedback_job = None
+        self.status.set(
+            message
+            or (
+                "手机与电脑需在同一局域网；请仅在可信任的网络中共享。"
+                if self.url
+                else "未获取到访问地址，请检查网络连接后重新检测。"
+            )
+        )
+        if message:
+            self.feedback_job = self.root.after(4000, self.show_status)
 
     def choose_folder(self):
         """选择并立即切换当前运行实例使用的共享目录。"""
@@ -428,7 +540,9 @@ class App:
             return
 
         SHARED_DIR = Path(selected).resolve()
-        self.shared_dir_label.config(text=f"共享目录：{SHARED_DIR}")
+        self.folder_path.set(str(SHARED_DIR))
+        self.folder_entry.xview_moveto(1)
+        self.show_status("共享目录已切换，刷新手机页面即可查看。")
 
     def draw_qr(self, value):
         """用 segno 生成二维码，并直接绘制到 Tk Canvas。"""
@@ -459,9 +573,15 @@ class App:
                     )
 
     def copy_url(self):
-        self.root.clipboard_clear()
-        self.root.clipboard_append(self.url)
-        self.root.update()  # 让剪贴板内容在窗口关闭后仍可用
+        if not self.url:
+            return
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(self.url)
+        except tk.TclError:
+            self.show_status("复制失败，请选中访问地址后手动复制。")
+        else:
+            self.show_status("地址已复制，可粘贴到同一局域网设备的浏览器中。")
 
     def open_folder(self):
         try:
@@ -470,6 +590,8 @@ class App:
             messagebox.showerror("无法打开目录", str(exc), parent=self.root)
 
     def close(self):
+        if self.feedback_job is not None:
+            self.root.after_cancel(self.feedback_job)
         if self.server is not None:
             self.server.shutdown()
             self.server.server_close()
@@ -530,12 +652,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(size))
-            safe_download_name = (
-                target.name.replace('"', "'").replace("\r", "").replace("\n", "")
-            )
             self.send_header(
                 "Content-Disposition",
-                f'attachment; filename="{safe_download_name}"',
+                f"attachment; filename=\"download\"; filename*=UTF-8''{quote(target.name)}",
             )
             self.end_headers()
             with target.open("rb") as source:
