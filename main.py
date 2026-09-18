@@ -871,14 +871,26 @@ class App:
         )
 
     def action_button(self, parent, text, command, primary=False):
+        # Aqua 会用原生灰色按钮外观覆盖自定义背景色，白色文字在 macOS
+        # 上对比度不足；改用品牌蓝，其他平台仍保持白字蓝底。
+        primary_foreground = (
+            self.colors["primary"] if sys.platform == "darwin" else "white"
+        )
+        primary_active_foreground = (
+            self.colors["primary_active"] if sys.platform == "darwin" else "white"
+        )
         button = tk.Button(
             parent,
             text=text,
             command=command,
             bg=self.colors["primary"] if primary else self.colors["card"],
-            fg="white" if primary else self.colors["primary"],
+            fg=primary_foreground if primary else self.colors["primary"],
             activebackground=self.colors["primary_active"] if primary else "#e6edfa",
-            activeforeground="white" if primary else self.colors["primary_active"],
+            activeforeground=(
+                primary_active_foreground
+                if primary
+                else self.colors["primary_active"]
+            ),
             disabledforeground=self.colors["muted"],
             relief="flat",
             borderwidth=0,
