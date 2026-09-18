@@ -117,5 +117,4 @@ uv run ruff check .
 
 除 `favicon.ico` 外，本项目的源代码及其他项目内容使用 [WTFPL v2（Do What The Fuck You Want To Public License）](https://www.wtfpl.net/) 发布，详见 [LICENSE](LICENSE)。
 
-软件图标 `favicon.ico` 的版权归 [Bison仓鼠](https://space.bilibili.com/136107) 所有，不属于 WTFPL 授权范围。  
-若存在侵权行为，请提交 [issue](https://github.com/MisakaAI/PyDrop/issues)，我将在看到后立即删除。
+软件图标 `favicon.ico` 的画师为 [路过哒雪](https://space.bilibili.com/5561584)，不属于 WTFPL 授权范围。  

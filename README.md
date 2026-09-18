@@ -125,7 +125,4 @@ uv run ruff check .
 
 Except for `favicon.ico`, the source code and other project contents are released under the [Do What The Fuck You Want To Public License v2 (WTFPL)](https://www.wtfpl.net/). See [LICENSE](LICENSE).
 
-The copyright of `favicon.ico` belongs to [Bison仓鼠](https://space.bilibili.com/136107).  
-The icon is not covered by the WTFPL.  
-If there is any infringement, please submit an [issue](https://github.com/MisakaAI/PyDrop/issues),  
-and we will delete it immediately upon seeing it.
+The copyright of `favicon.ico` belongs to [路过哒雪](https://space.bilibili.com/5561584). The icon is not covered by the WTFPL.
