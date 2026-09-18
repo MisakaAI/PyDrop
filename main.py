@@ -8,16 +8,16 @@ import socket
 import subprocess
 import sys
 import threading
+import tkinter as tk
 import uuid
 from email.parser import BytesParser
 from email.policy import default
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from tkinter import filedialog, messagebox
 from urllib.parse import quote, unquote, urlsplit
 
 import segno
-import tkinter as tk
-from tkinter import filedialog, messagebox
 
 HOST = "0.0.0.0"
 PORT = 12450

@@ -16,9 +16,9 @@ PyDrop is a lightweight LAN file-transfer tool for computers and phones. It star
 
 ## Requirements
 
-- Python 3.8 or newer
+- Python 3.13 or newer
+- [uv](https://docs.astral.sh/uv/)
 - Tkinter
-- `segno`
 
 Tkinter is included with most Python installations. On Debian/Ubuntu, install it with:
 
@@ -28,16 +28,16 @@ sudo apt install python3-tk
 
 ## Run from source
 
-Install the dependency:
+Create the project environment and install the locked dependencies:
 
 ```bash
-python -m pip install segno
+uv sync
 ```
 
 Start PyDrop:
 
 ```bash
-python ser.py
+uv run python main.py
 ```
 
 Connect the phone and computer to the same Wi-Fi network, then scan the QR code shown in the PyDrop window. You can also open the displayed URL manually.
@@ -46,22 +46,22 @@ The default port is `12450`. The default shared directory is `shared` next to th
 
 ## Build a single executable
 
-Install PyInstaller:
+Use PyInstaller through uvx:
 
 ```bash
-python -m pip install pyinstaller
+uvx pyinstaller --version
 ```
 
 On Windows:
 
 ```bash
-pyinstaller --onefile --windowed --name PyDrop --icon=favicon.ico --add-data "favicon.ico;." ser.py
+uvx pyinstaller --onefile --windowed --name PyDrop --icon=favicon.ico --add-data "favicon.ico;." main.py
 ```
 
 On Linux or macOS:
 
 ```bash
-pyinstaller --onefile --windowed --name PyDrop --icon=favicon.ico --add-data "favicon.ico:." ser.py
+uvx pyinstaller --onefile --windowed --name PyDrop --icon=favicon.ico --add-data "favicon.ico:." main.py
 ```
 
 The executable is created in the `dist` directory. Build the application separately on each target operating system.
@@ -72,13 +72,22 @@ PyDrop keeps the default `shared` directory next to the executable when running 
 
 - Both devices must be on the same LAN, and the computer firewall must allow TCP port `12450` on the private/local network.
 - PyDrop is intended for trusted local networks. It has no login or encryption layer.
-- To change the port, edit `PORT` in `ser.py` before running or building the application.
+- To change the port, edit `PORT` in `main.py` before running or building the application.
+
+## Development
+
+Format and lint the project with Ruff:
+
+```bash
+uv run ruff format .
+uv run ruff check .
+```
 
 ## Project layout
 
 ```text
 .
-├── ser.py          # Application and web server
+├── main.py         # Application and web server
 ├── favicon.ico     # Application icon
 ├── shared/         # Default shared files
 ├── README.md

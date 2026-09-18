@@ -16,9 +16,9 @@ PyDrop 是一个轻量的局域网文件互传工具，适用于电脑和手机�
 
 ## 运行环境
 
-- Python 3.8 或更高版本
+- Python 3.13 或更高版本
+- [uv](https://docs.astral.sh/uv/)
 - Tkinter
-- `segno`
 
 大多数 Python 安装包已包含 Tkinter。Debian / Ubuntu 可执行：
 
@@ -28,16 +28,16 @@ sudo apt install python3-tk
 
 ## 从源码运行
 
-安装依赖：
+创建项目虚拟环境并安装锁定的依赖：
 
 ```bash
-python -m pip install segno
+uv sync
 ```
 
 启动程序：
 
 ```bash
-python ser.py
+uv run python main.py
 ```
 
 让手机和电脑连接同一个 Wi-Fi，然后使用手机扫描 PyDrop 窗口中的二维码，也可以手动打开窗口中显示的地址。
@@ -46,22 +46,22 @@ python ser.py
 
 ## 使用 PyInstaller 打包成单文件
 
-安装 PyInstaller：
+使用 uvx 调用 PyInstaller：
 
 ```bash
-python -m pip install pyinstaller
+uvx pyinstaller --version
 ```
 
 Windows：
 
 ```bash
-pyinstaller --onefile --windowed --name PyDrop --icon=favicon.ico --add-data "favicon.ico;." ser.py
+uvx pyinstaller --onefile --windowed --name PyDrop --icon=favicon.ico --add-data "favicon.ico;." main.py
 ```
 
 Linux / macOS：
 
 ```bash
-pyinstaller --onefile --windowed --name PyDrop --icon=favicon.ico --add-data "favicon.ico:." ser.py
+uvx pyinstaller --onefile --windowed --name PyDrop --icon=favicon.ico --add-data "favicon.ico:." main.py
 ```
 
 生成的可执行文件位于 `dist` 目录。需要在目标操作系统上分别打包，不能跨操作系统直接打包。
@@ -74,13 +74,22 @@ pyinstaller --onefile --windowed --name PyDrop --icon=favicon.ico --add-data "fa
 - Windows 防火墙提示时，需要允许 PyDrop 在专用网络中通信。
 - PyDrop 默认监听 TCP `12450` 端口。
 - 本程序没有登录和加密功能，请只在可信任的局域网中使用。
-- 如需修改端口，运行或打包前修改 `ser.py` 中的 `PORT`。
+- 如需修改端口，运行或打包前修改 `main.py` 中的 `PORT`。
+
+## 开发
+
+使用 Ruff 格式化并检查代码：
+
+```bash
+uv run ruff format .
+uv run ruff check .
+```
 
 ## 项目结构
 
 ```text
 .
-├── ser.py          # 主程序和网页服务器
+├── main.py         # 主程序和网页服务器
 ├── favicon.ico     # 软件图标
 ├── shared/         # 默认共享文件目录
 ├── README.md       # English documentation
