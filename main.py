@@ -43,167 +43,332 @@ PAGE_HEAD = """<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f3f7fa">
   <title>PyDrop - 局域网文件互传</title>
   <style>
-    * {
-      box-sizing: border-box;
+    :root {
+      color-scheme: light;
+      --text: #1e3445;
+      --muted: #617582;
+      --accent: #087e8b;
+      --accent-dark: #05626d;
+      --border: #e1eaf0;
     }
+
+    * { box-sizing: border-box; }
 
     body {
       margin: 0;
-      background: #f4f5f7;
-      color: #222;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      min-height: 100vh;
+      background:
+        radial-gradient(ellipse at 0% 0%, #deeff4 0, transparent 55%),
+        radial-gradient(ellipse at 100% 30%, #e8edf9 0, transparent 50%),
+        #f3f7fa;
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+        "PingFang SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.6;
+      -webkit-tap-highlight-color: transparent;
     }
 
     main {
-      width: min(100% - 28px, 640px);
+      width: min(100% - 40px, 760px);
       margin: 0 auto;
-      padding: 24px 0 36px;
+      padding: 36px 0 28px;
     }
+
+    .brand, .brand-name, .section-heading {
+      display: flex;
+      align-items: center;
+    }
+
+    .brand { justify-content: space-between; gap: 16px; }
+    .brand-name { gap: 10px; font-size: 21px; font-weight: 750; }
+
+    .brand-icon {
+      display: grid;
+      place-items: center;
+      width: 40px;
+      height: 40px;
+      border-radius: 13px;
+      background: var(--accent);
+      color: #fff;
+      box-shadow: 0 5px 12px #087e8b20;
+    }
+
+    .icon {
+      width: 22px;
+      height: 22px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      flex-shrink: 0;
+    }
+
+    .network-badge {
+      padding: 5px 11px;
+      border: 1px solid #cce3e7;
+      border-radius: 999px;
+      color: var(--accent-dark);
+      background: #edf8fa;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .intro { padding: 34px 0 24px; }
 
     h1 {
       margin: 0;
-      font-size: 22px;
+      font-size: clamp(27px, 5vw, 36px);
+      line-height: 1.35;
+      letter-spacing: -0.8px;
     }
 
-    h2 {
-      margin: 0 0 14px;
-      font-size: 18px;
-    }
-
-    .subtitle {
-      margin: 7px 0 0;
-      color: #666;
-      font-size: 14px;
-    }
+    .subtitle { margin: 12px 0 0; color: var(--muted); font-size: 14px; }
 
     .card {
-      margin-top: 16px;
-      padding: 18px;
+      margin-bottom: 20px;
+      padding: 26px;
       background: #fff;
-      border: 1px solid #e2e4e8;
-      border-radius: 10px;
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      box-shadow: 0 8px 30px #25465b06;
     }
+
+    .section-heading { gap: 12px; margin-bottom: 20px; }
+
+    .section-number {
+      display: grid;
+      place-items: center;
+      width: 36px;
+      height: 36px;
+      flex-shrink: 0;
+      border-radius: 11px;
+      background: #edf6f8;
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
+    h2 { margin: 0; font-size: 17px; font-weight: 650; }
+    .section-description { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+
+    .upload-area {
+      padding: 24px;
+      border: 1px dashed #b7d5dd;
+      border-radius: 16px;
+      background: #f7fbfc;
+      text-align: center;
+    }
+
+    .upload-icon {
+      display: grid;
+      place-items: center;
+      width: 48px;
+      height: 48px;
+      margin: 0 auto 12px;
+      border-radius: 15px;
+      background: #e4f2f5;
+      color: var(--accent);
+    }
+
+    .upload-label { display: block; font-size: 15px; font-weight: 600; }
+    .upload-hint { margin: 4px 0 18px; color: var(--muted); font-size: 12px; }
 
     input[type="file"] {
       display: block;
       width: 100%;
-      padding: 9px;
-      border: 1px solid #d5d8dd;
-      border-radius: 6px;
+      min-width: 0;
+      padding: 6px;
+      border: 1px solid var(--border);
+      border-radius: 11px;
       background: #fff;
-      font-size: 14px;
+      color: var(--muted);
+      font: inherit;
+      font-size: 13px;
+      text-align: left;
     }
 
-    button,
-    .download {
-      display: inline-block;
-      min-width: 84px;
-      text-align: center;
-      min-height: 42px;
+    input[type="file"]::file-selector-button {
+      margin-right: 12px;
+      padding: 9px 14px;
       border: 0;
-      border-radius: 6px;
-      background: #1769aa;
-      color: #fff;
-      font-size: 15px;
+      border-radius: 7px;
+      background: #eaf3f6;
+      color: var(--accent-dark);
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    button, .download {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 44px;
+      border: 1px solid transparent;
+      border-radius: 11px;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 600;
       text-decoration: none;
       cursor: pointer;
+      transition: background-color 160ms ease, box-shadow 160ms ease;
+      touch-action: manipulation;
     }
 
     button {
       width: 100%;
-      margin-top: 10px;
+      margin-top: 16px;
+      padding: 12px 20px;
+      background: var(--accent);
+      color: #fff;
+      box-shadow: 0 4px 10px #087e8b18;
     }
 
     .download {
-      padding: 11px 14px;
+      flex-shrink: 0;
+      min-width: 72px;
+      padding: 8px 16px;
+      border-color: #d4e7eb;
+      background: #eff7f9;
+      color: var(--accent-dark);
       white-space: nowrap;
     }
 
-    button:active,
-    .download:active {
-      background: #125589;
+    :where(a, button, input):focus-visible {
+      outline: 3px solid #168998;
+      outline-offset: 4px;
     }
 
-    ul {
-      padding: 0;
-      margin: 0;
-      list-style: none;
+    @media (hover: hover) {
+      button:hover { background: var(--accent-dark); box-shadow: 0 6px 16px #087e8b26; }
+      .download:hover { background: #deeff3; }
+      .file-name:hover { color: var(--accent); text-decoration: underline; }
+      input[type="file"]::file-selector-button:hover { background: #deeff3; }
     }
+
+    button:active { background: #044f58; }
+    .download:active { background: #d1e7ec; }
+
+    ul { padding: 0; margin: 0; list-style: none; }
 
     li {
       display: flex;
       align-items: center;
-      gap: 12px;
-      padding: 12px 0;
-      border-top: 1px solid #eceef1;
+      gap: 16px;
+      padding: 18px 0;
+      border-top: 1px solid #edf1f4;
     }
 
-    li:first-child {
-      border-top: 0;
-      padding-top: 0;
-    }
-
-    li:last-child {
-      padding-bottom: 0;
-    }
-
-    .file-info {
-      min-width: 0;
-      flex: 1;
-    }
+    li:first-child { border-top: 0; padding-top: 0; }
+    li:last-child { padding-bottom: 0; }
+    .file-info { min-width: 0; flex: 1; }
 
     .file-name {
       display: block;
-      color: #1769aa;
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 550;
       overflow-wrap: anywhere;
       text-decoration: none;
     }
 
     .file-size {
       display: block;
-      margin-top: 4px;
-      color: #777;
+      margin-top: 5px;
+      color: var(--muted);
       font-size: 12px;
+      font-variant-numeric: tabular-nums;
     }
 
     .empty {
       margin: 0;
-      color: #777;
+      padding: 32px 16px;
+      border: 1px dashed var(--border);
+      border-radius: 14px;
+      background: #f8fafc;
+      color: var(--muted);
+      font-size: 14px;
+      text-align: center;
     }
 
-    @media (min-width: 480px) {
-      form {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-      }
+    footer { padding: 4px 12px; color: var(--muted); font-size: 12px; text-align: center; }
 
-      button {
-        width: auto;
-        margin-top: 0;
-        padding: 0 20px;
-      }
+    @media (max-width: 480px) {
+      main { width: calc(100% - 28px); padding-top: 22px; }
+      .intro { padding: 28px 2px 22px; }
+      .card { padding: 20px 16px; border-radius: 18px; }
+      .upload-area { padding: 20px 14px; }
+      li { gap: 12px; }
+      .download { min-width: 64px; padding-inline: 12px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      button, .download { transition: none; }
     }
   </style>
 </head>
 
 <body>
   <main>
-    <h1>PyDrop · 局域网文件互传</h1>
-    <p class="subtitle">上传文件，或点击下面的文件下载到手机</p>
-    <section class="card">
-      <h2>上传文件</h2>
+    <header class="brand">
+      <div class="brand-name">
+        <span class="brand-icon" aria-hidden="true">
+          <svg class="icon" viewBox="0 0 24 24">
+            <path d="M7 16V4m-4 4 4-4 4 4M17 8v12m-4-4 4 4 4-4" />
+          </svg>
+        </span>
+        PyDrop
+      </div>
+      <span class="network-badge">局域网文件互传</span>
+    </header>
+    <div class="intro">
+      <h1>文件互传，轻松一点。</h1>
+      <p class="subtitle">让文件在手机与电脑之间，自由来往。</p>
+    </div>
+    <section class="card" aria-labelledby="upload-heading">
+      <div class="section-heading">
+        <span class="section-number" aria-hidden="true">01</span>
+        <div>
+          <h2 id="upload-heading">上传文件</h2>
+          <p class="section-description">将此设备的文件发送到电脑</p>
+        </div>
+      </div>
       <form method="post" enctype="multipart/form-data">
-        <input type="file" name="file" required>
-        <button type="submit">上传</button>
+        <div class="upload-area">
+          <span class="upload-icon" aria-hidden="true">
+            <svg class="icon" viewBox="0 0 24 24">
+              <path d="M12 16V3m-5 5 5-5 5 5M4 15v5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5" />
+            </svg>
+          </span>
+          <label class="upload-label" for="upload-file">选择一个要分享的文件</label>
+          <p class="upload-hint" id="upload-hint">照片、视频、文档，随心传递</p>
+          <input id="upload-file" type="file" name="file" aria-describedby="upload-hint" required>
+        </div>
+        <button type="submit">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 19V5m-5 5 5-5 5 5" />
+          </svg>
+          上传到电脑
+        </button>
       </form>
     </section>
-    <section class="card">
-      <h2>共享文件</h2>
+    <section class="card" aria-labelledby="files-heading">
+      <div class="section-heading">
+        <span class="section-number" aria-hidden="true">02</span>
+        <div>
+          <h2 id="files-heading">共享文件</h2>
+          <p class="section-description">点击文件名或下载按钮，保存到此设备</p>
+        </div>
+      </div>
       {files}
     </section>
+    <footer>连接同一局域网，即可上传与下载</footer>
   </main>
 </body>
 
