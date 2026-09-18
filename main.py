@@ -764,6 +764,11 @@ class App:
 
 
 class Handler(BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        """Keep requests working when a windowed build has no stderr stream."""
+        if sys.stderr is not None:
+            super().log_message(format, *args)
+
     def reply(self, status, body, content_type="text/html; charset=utf-8"):
         data = body.encode("utf-8") if isinstance(body, str) else body
         self.send_response(status)
