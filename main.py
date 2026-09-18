@@ -1029,7 +1029,7 @@ class Handler(BaseHTTPRequestHandler):
         if request_path == "/":
             files = []
             for item in sorted(SHARED_DIR.iterdir(), key=lambda p: p.name.lower()):
-                if item.is_file():
+                if item.is_file() and not item.name.startswith("."):
                     name = html.escape(item.name)
                     href = html.escape("/files/" + quote(item.name), quote=True)
                     size = self.format_size(item.stat().st_size)
