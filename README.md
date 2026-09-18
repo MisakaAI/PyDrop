@@ -47,22 +47,24 @@ The default port is `12450`. The default shared directory is `shared` next to th
 
 ## Build a single executable
 
-Use PyInstaller through uvx:
+Run PyInstaller in the project environment so it can access PyDrop's dependencies,
+including `segno`. The `--with pyinstaller` option installs PyInstaller temporarily on
+top of the project environment without adding it to the project dependencies:
 
 ```bash
-uvx pyinstaller --version
+uv run --with pyinstaller pyinstaller --version
 ```
 
 On Windows:
 
 ```bash
-uvx pyinstaller --onefile --windowed --name PyDrop --icon=favicon.ico --add-data "favicon.ico;." main.py
+uv run --with pyinstaller pyinstaller --onefile --windowed --name PyDrop --icon=favicon.ico --add-data "favicon.ico;." main.py
 ```
 
 On Linux or macOS:
 
 ```bash
-uvx pyinstaller --onefile --windowed --name PyDrop --icon=favicon.ico --add-data "favicon.ico:." main.py
+uv run --with pyinstaller pyinstaller --onefile --windowed --name PyDrop --icon=favicon.ico --add-data "favicon.ico:." main.py
 ```
 
 The executable is created in the `dist` directory. Build the application separately on each target operating system.

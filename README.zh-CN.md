@@ -47,22 +47,23 @@ uv run python main.py
 
 ## 使用 PyInstaller 打包成单文件
 
-使用 uvx 调用 PyInstaller：
+在项目环境中运行 PyInstaller，确保它能够访问 PyDrop 的依赖（包括 `segno`）。
+`--with pyinstaller` 会将 PyInstaller 临时安装到项目环境之上，不会将其添加为项目依赖：
 
 ```bash
-uvx pyinstaller --version
+uv run --with pyinstaller pyinstaller --version
 ```
 
 Windows：
 
 ```bash
-uvx pyinstaller --onefile --windowed --name PyDrop --icon=favicon.ico --add-data "favicon.ico;." main.py
+uv run --with pyinstaller pyinstaller --onefile --windowed --name PyDrop --icon=favicon.ico --add-data "favicon.ico;." main.py
 ```
 
 Linux / macOS：
 
 ```bash
-uvx pyinstaller --onefile --windowed --name PyDrop --icon=favicon.ico --add-data "favicon.ico:." main.py
+uv run --with pyinstaller pyinstaller --onefile --windowed --name PyDrop --icon=favicon.ico --add-data "favicon.ico:." main.py
 ```
 
 生成的可执行文件位于 `dist` 目录。需要在目标操作系统上分别打包，不能跨操作系统直接打包。
