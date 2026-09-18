@@ -43,7 +43,7 @@ uv run python main.py
 
 Connect the phone and computer to the same Wi-Fi network, then scan the QR code shown in the PyDrop window. You can also open the displayed URL manually.
 
-The default port is `12450`. The default shared directory is `shared` next to the script. You can choose a different existing directory with the **Choose shared directory** button in the desktop app.
+The default port is `12450`. The default shared directory is the current user's `Downloads` folder (`~/Downloads`). You can choose a different existing directory with the **Choose shared directory** button in the desktop app.
 
 ## Build a single executable
 
@@ -69,8 +69,6 @@ uv run --with pyinstaller pyinstaller --onefile --windowed --name PyDrop --icon=
 
 The executable is created in the `dist` directory. Build the application separately on each target operating system.
 
-PyDrop keeps the default `shared` directory next to the executable when running as a PyInstaller single-file application.
-
 ## Notes
 
 - Both devices must be on the same LAN, and the computer firewall must allow TCP port `12450` on the private/local network.
@@ -92,7 +90,6 @@ uv run ruff check .
 .
 ├── main.py         # Application and web server
 ├── favicon.ico     # Application icon
-├── shared/         # Default shared files
 ├── README.md
 ├── README.zh-CN.md
 └── LICENSE         # WTFPL v2

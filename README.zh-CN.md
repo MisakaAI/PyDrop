@@ -43,7 +43,7 @@ uv run python main.py
 
 让手机和电脑连接同一个 Wi-Fi，然后使用手机扫描 PyDrop 窗口中的二维码，也可以手动打开窗口中显示的地址。
 
-默认端口为 `12450`，共享目录是程序目录下的 `shared` 文件夹。手动放入该目录的文件也会显示在网页中，也可以通过 GUI 中的“选择共享目录”按钮切换到其他已有目录。
+默认端口为 `12450`，共享目录是当前用户的下载文件夹（`~/Downloads`）。手动放入该目录的文件也会显示在网页中，也可以通过 GUI 中的“选择共享目录”按钮切换到其他已有目录。
 
 ## 使用 PyInstaller 打包成单文件
 
@@ -68,8 +68,6 @@ uv run --with pyinstaller pyinstaller --onefile --windowed --name PyDrop --icon=
 
 生成的可执行文件位于 `dist` 目录。需要在目标操作系统上分别打包，不能跨操作系统直接打包。
 
-使用 PyInstaller 单文件程序运行时，默认的 `shared` 目录会放在可执行文件旁边。
-
 ## 注意事项
 
 - 手机和电脑必须连接同一个局域网。
@@ -93,7 +91,6 @@ uv run ruff check .
 .
 ├── main.py         # 主程序和网页服务器
 ├── favicon.ico     # 软件图标
-├── shared/         # 默认共享文件目录
 ├── README.md       # English documentation
 ├── README.zh-CN.md # 中文文档
 └── LICENSE         # WTFPL v2

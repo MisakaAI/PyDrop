@@ -23,17 +23,9 @@ import segno
 HOST = "0.0.0.0"
 PORT = 12450
 
-
-def application_dir():
-    """获取程序所在目录，兼容源码运行和 PyInstaller 单文件运行。"""
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent
-
-
 # 这个目录内的文件会显示在手机网页上，并可直接下载。
-# 默认使用程序目录下的 shared 文件夹。
-SHARED_DIR = application_dir() / "shared"
+# Path.home() 会在 Windows 上返回当前用户目录，并使用平台原生路径格式。
+SHARED_DIR = Path.home() / "Downloads"
 SHARED_DIR.mkdir(parents=True, exist_ok=True)
 MAX_SIZE = 2 * 1024 * 1024 * 1024  # 2 GiB
 
