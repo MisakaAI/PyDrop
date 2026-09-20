@@ -54,7 +54,14 @@ docker run \
         apt-get update
         apt-get upgrade --yes
         apt-get install --yes --no-install-recommends \
-            binutils
+            binutils \
+            tk
+
+        # The official slim image builds Python with Tk support, but removes
+        # the Tcl/Tk runtime packages while minimizing the final image.  Keep
+        # them installed so PyInstaller can analyze tkinter and bundle its
+        # extension, shared libraries, and Tcl/Tk data files.
+        python -c "import tkinter; print(\"Tkinter: Tcl/Tk\", tkinter.TclVersion)"
 
         python -m pip install \
             --index-url "$PYPI_MIRROR" \
