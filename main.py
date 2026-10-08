@@ -338,9 +338,9 @@ PAGE_HEAD = """<!doctype html>
               <path d="M12 16V3m-5 5 5-5 5 5M4 15v5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5" />
             </svg>
           </span>
-          <label class="upload-label" for="upload-file">选择一个要分享的文件</label>
-          <p class="upload-hint" id="upload-hint">照片、视频、文档，随心传递</p>
-          <input id="upload-file" type="file" name="file" aria-describedby="upload-hint" required>
+          <label class="upload-label" for="upload-file">选择要分享的文件</label>
+          <p class="upload-hint" id="upload-hint">照片、视频、文档，可一次选择多个文件</p>
+          <input id="upload-file" type="file" name="file" aria-describedby="upload-hint" multiple required>
         </div>
         <button type="submit">
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -362,6 +362,36 @@ PAGE_HEAD = """<!doctype html>
     </section>
     <footer>连接同一局域网，即可上传与下载</footer>
   </main>
+  <script>
+    const uploadInput = document.getElementById("upload-file");
+    const uploadHint = document.getElementById("upload-hint");
+    const defaultHint = uploadHint.textContent;
+    uploadInput.addEventListener("change", () => {
+      const count = uploadInput.files.length;
+      if (count === 0) {
+        uploadHint.textContent = defaultHint;
+        return;
+      }
+      const total = Array.from(uploadInput.files).reduce(
+        (sum, file) => sum + file.size,
+        0
+      );
+      uploadHint.textContent = `已选择 ${count} 个文件，共 ${formatSize(total)}`;
+    });
+
+    function formatSize(size) {
+      const units = ["B", "KB", "MB", "GB"];
+      let value = size;
+      let unit = units[0];
+      for (const candidate of units) {
+        unit = candidate;
+        if (value < 1024 || candidate === "GB") break;
+        value /= 1024;
+      }
+      const digits = unit === "B" ? 0 : 1;
+      return `${value.toFixed(digits)} ${unit}`;
+    }
+  </script>
 </body>
 
 </html>"""
@@ -469,6 +499,8 @@ UPLOAD_SUCCESS_PAGE = """<!doctype html>
     }
 
     .subtitle { margin: 9px 0 26px; color: var(--muted); font-size: 14px; }
+
+    .file-list { display: grid; gap: 10px; }
 
     .file-summary {
       display: flex;
@@ -582,17 +614,9 @@ UPLOAD_SUCCESS_PAGE = """<!doctype html>
         <svg class="icon" viewBox="0 0 24 24"><path d="m5 12 4.5 4.5L19 7" /></svg>
       </div>
       <h1 id="success-heading">上传完成</h1>
-      <p class="subtitle" role="status">文件已安全保存到电脑的共享文件夹</p>
-      <div class="file-summary">
-        <span class="file-icon" aria-hidden="true">
-          <svg class="icon" viewBox="0 0 24 24">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6" />
-          </svg>
-        </span>
-        <span class="file-details">
-          <span class="file-name">{filename}</span>
-          <span class="file-meta">{size} · 已保存</span>
-        </span>
+      <p class="subtitle" role="status">{summary}</p>
+      <div class="file-list">
+        {files}
       </div>
       <div class="actions">
         <a class="button primary" href="/">
@@ -643,6 +667,23 @@ def open_shared_dir():
         subprocess.Popen([opener, path])
 
 
+class FileTransferServer(ThreadingHTTPServer):
+    """忽略客户端中途断开连接产生的噪声异常。
+
+    浏览器常会在正式请求前建立预连接，用户取消上传或关闭页面时也会直接
+    重置连接。这类 ConnectionError 不影响服务端，不应打印完整 traceback。
+    """
+
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def handle_error(self, request, client_address):
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionError, TimeoutError)):
+            return
+        super().handle_error(request, client_address)
+
+
 class App:
     QR_SIZE = 256
 
@@ -680,8 +721,7 @@ class App:
 
     def start_server(self):
         try:
-            self.server = ThreadingHTTPServer((HOST, PORT), Handler)
-            self.server.daemon_threads = True
+            self.server = FileTransferServer((HOST, PORT), Handler)
         except OSError as exc:
             messagebox.showerror(
                 "启动失败",
@@ -1102,7 +1142,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(400, "没有收到文件")
             return
         if length > MAX_SIZE:
-            self.send_error(413, "文件不能超过 2 GiB")
+            self.send_error(413, "上传内容总大小不能超过 2 GiB")
             return
 
         body = self.rfile.read(length)
@@ -1114,6 +1154,7 @@ class Handler(BaseHTTPRequestHandler):
         )
         message = BytesParser(policy=default).parsebytes(raw)
 
+        saved = []
         for part in message.iter_parts():
             filename = part.get_filename()
             if not filename:
@@ -1127,14 +1168,33 @@ class Handler(BaseHTTPRequestHandler):
             suffix = Path(filename).suffix
             target = SHARED_DIR / f"{stem}_{uuid.uuid4().hex[:8]}{suffix}"
             target.write_bytes(part.get_payload(decode=True) or b"")
+            saved.append((target.name, target.stat().st_size))
 
-            success_page = UPLOAD_SUCCESS_PAGE.replace(
-                "{filename}", html.escape(target.name)
-            ).replace("{size}", self.format_size(target.stat().st_size))
-            self.reply(200, success_page)
+        if not saved:
+            self.send_error(400, "没有找到上传文件")
             return
 
-        self.send_error(400, "没有找到上传文件")
+        file_items = "".join(
+            '<div class="file-summary">'
+            '<span class="file-icon" aria-hidden="true">'
+            '<svg class="icon" viewBox="0 0 24 24">'
+            '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6" />'
+            "</svg></span>"
+            '<span class="file-details">'
+            f'<span class="file-name">{html.escape(name)}</span>'
+            f'<span class="file-meta">{self.format_size(size)} · 已保存</span>'
+            "</span></div>"
+            for name, size in saved
+        )
+        summary = (
+            f"已保存 {len(saved)} 个文件到电脑的共享文件夹"
+            if len(saved) > 1
+            else "文件已安全保存到电脑的共享文件夹"
+        )
+        success_page = UPLOAD_SUCCESS_PAGE.replace("{files}", file_items).replace(
+            "{summary}", summary
+        )
+        self.reply(200, success_page)
 
 
 if __name__ == "__main__":
