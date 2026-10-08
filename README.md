@@ -12,6 +12,13 @@ and lets you upload or download files from any browser on the same network.
 - Copy the access URL and refresh the address and QR code after switching networks
 - Upload files from a phone or another computer
 - Browse and download files from the shared directory
+- Chat-style window on both the phone page and the desktop app: messages from the
+  other device appear on the left, your own on the right
+- Send text both ways; received text is selectable and copyable
+- Send files from the phone with the attach button in the chat input area, or from
+  the desktop app with "Select files and send"
+- The conversation lives in memory for the current session only — it is never
+  written to disk and disappears when the app closes
 - Open the shared directory from the desktop app
 - Choose or change the shared directory from the desktop app
 - Works across Windows, macOS, Linux, Android, and iOS browsers
@@ -53,6 +60,8 @@ You can also open the displayed URL manually.
 
 The default port is `12450`.  
 The default shared directory is the current user's `Downloads` folder (`~/Downloads`).  
+Files placed in that directory show up in the phone chat as messages from the  
+computer, and the **Shared files** button in the top bar lists every file in it.  
 You can choose a different existing directory with the **Choose shared directory**  
 button in the desktop app.
 

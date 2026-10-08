@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import html
+import json
 import mimetypes
 import os
 import shutil
@@ -8,6 +9,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 import uuid
 from email.parser import BytesParser
@@ -16,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tkinter import filedialog, messagebox
 from tkinter import font as tkfont
-from urllib.parse import quote, unquote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 import segno
 
@@ -28,15 +30,750 @@ PORT = 12450
 SHARED_DIR = Path.home() / "Downloads"
 SHARED_DIR.mkdir(parents=True, exist_ok=True)
 MAX_SIZE = 2 * 1024 * 1024 * 1024  # 2 GiB
+MAX_TEXT_LENGTH = 50_000  # 单条文本的最大字符数
+MAX_TEXT_BODY = 256 * 1024  # 文本请求体的最大字节数
 
 PAGE_HEAD = """<!doctype html>
 <html lang="zh-CN">
 
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f3f7fa">
+  <title>PyDrop - 局域网互传</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --text: #1e3445;
+      --muted: #617582;
+      --accent: #087e8b;
+      --accent-dark: #05626d;
+      --border: #e1eaf0;
+      --page: #f3f7fa;
+      --chat: #edf3f7;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { height: 100%; }
+
+    body {
+      margin: 0;
+      background: var(--page);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+        "PingFang SC", "Microsoft YaHei", sans-serif;
+      font-size: 15px;
+      line-height: 1.6;
+      -webkit-tap-highlight-color: transparent;
+      -webkit-text-size-adjust: 100%;
+    }
+
+    .app {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      height: 100vh;
+      height: 100dvh;
+      max-height: 100vh;
+      max-height: 100dvh;
+      margin: 0 auto;
+      background: var(--chat);
+    }
+
+    @media (min-width: 720px) {
+      body { padding: 24px 20px; }
+      .app {
+        width: min(100%, 660px);
+        height: calc(100vh - 48px);
+        height: calc(100dvh - 48px);
+        max-height: calc(100vh - 48px);
+        max-height: calc(100dvh - 48px);
+        border: 1px solid var(--border);
+        border-radius: 24px;
+        box-shadow: 0 18px 50px #25465b14;
+        overflow: hidden;
+      }
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+      padding: 11px 14px;
+      padding-top: calc(11px + env(safe-area-inset-top, 0));
+      background: #fff;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+
+    .brand-icon {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      flex-shrink: 0;
+      border-radius: 11px;
+      background: var(--accent);
+      color: #fff;
+      box-shadow: 0 5px 12px #087e8b20;
+    }
+
+    .icon {
+      width: 20px;
+      height: 20px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      flex-shrink: 0;
+    }
+
+    .brand-name { display: block; font-size: 16px; font-weight: 750; letter-spacing: -0.2px; }
+    .brand-sub { display: block; color: var(--muted); font-size: 11px; line-height: 1.4; }
+
+    .topbar-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+
+    button { font: inherit; cursor: pointer; }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 34px;
+      padding: 6px 12px;
+      border: 1px solid #d4e7eb;
+      border-radius: 999px;
+      background: #eff7f9;
+      color: var(--accent-dark);
+      font-size: 12.5px;
+      font-weight: 650;
+      text-decoration: none;
+      white-space: nowrap;
+      transition: background-color 160ms ease;
+      touch-action: manipulation;
+    }
+
+    .chip .icon { width: 16px; height: 16px; }
+
+    .chat {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 14px 8px;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+    }
+
+    .messages {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .messages:empty::before {
+      content: "还没有消息。在下方输入文字，或点击回形针按钮发送文件。";
+      display: block;
+      margin: 26px auto 0;
+      max-width: 230px;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: center;
+    }
+
+    .message {
+      display: flex;
+      flex-direction: column;
+      max-width: 85%;
+      animation: bubble-in 240ms ease-out;
+    }
+
+    .message.in { align-self: flex-start; align-items: flex-start; }
+    .message.out { align-self: flex-end; align-items: flex-end; }
+
+    .message-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0 4px 5px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .message.out .message-meta { flex-direction: row-reverse; }
+
+    .bubble {
+      padding: 10px 13px;
+      border-radius: 16px;
+      font-size: 14.5px;
+      line-height: 1.65;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      -webkit-user-select: text;
+      user-select: text;
+      -webkit-touch-callout: default;
+    }
+
+    .message.in .bubble {
+      background: #fff;
+      border: 1px solid var(--border);
+      border-top-left-radius: 5px;
+      box-shadow: 0 2px 10px #25465b0a;
+    }
+
+    .message.out .bubble {
+      background: var(--accent);
+      color: #fff;
+      border-top-right-radius: 5px;
+      box-shadow: 0 4px 12px #087e8b24;
+    }
+
+    .copy-button {
+      padding: 2px 9px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.6;
+    }
+
+    .file-card {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 210px;
+      max-width: 100%;
+      padding: 12px 14px;
+      border-radius: 16px;
+      color: inherit;
+      text-decoration: none;
+      transition: background-color 160ms ease;
+    }
+
+    .message.in .file-card {
+      background: #fff;
+      border: 1px solid var(--border);
+      border-top-left-radius: 5px;
+      box-shadow: 0 2px 10px #25465b0a;
+    }
+
+    .message.out .file-card {
+      background: var(--accent);
+      border-top-right-radius: 5px;
+      box-shadow: 0 4px 12px #087e8b24;
+    }
+
+    .file-icon {
+      display: grid;
+      place-items: center;
+      width: 38px;
+      height: 38px;
+      flex-shrink: 0;
+      border-radius: 11px;
+    }
+
+    .message.in .file-icon { background: #e4f2f5; color: var(--accent); }
+    .message.out .file-icon { background: #ffffff2e; color: #fff; }
+
+    .file-info { min-width: 0; }
+    .file-name { display: block; font-size: 13.5px; font-weight: 650; line-height: 1.45; overflow-wrap: anywhere; }
+    .file-size { display: block; margin-top: 2px; font-size: 11.5px; opacity: .8; }
+
+    .message.out .file-card,
+    .message.out .file-card .file-name,
+    .message.out .file-card .file-size { color: #fff; }
+
+    .composer-wrap {
+      flex-shrink: 0;
+      background: #fff;
+      border-top: 1px solid var(--border);
+      padding-bottom: env(safe-area-inset-bottom, 0);
+    }
+
+    .composer-status {
+      margin: 0;
+      padding: 0 16px;
+      color: var(--accent-dark);
+      font-size: 12px;
+    }
+
+    .composer-status:not(:empty) { padding-top: 8px; }
+    .composer-status.is-error { color: #b3261e; }
+
+    .progress { height: 3px; background: #e6eef1; overflow: hidden; }
+    .progress[hidden] { display: none; }
+
+    .progress-bar {
+      display: block;
+      width: 0;
+      height: 100%;
+      background: var(--accent);
+      transition: width 140ms linear;
+    }
+
+    .composer { display: flex; align-items: flex-end; gap: 8px; padding: 10px 14px; }
+
+    .composer textarea {
+      flex: 1;
+      min-width: 0;
+      min-height: 44px;
+      max-height: 132px;
+      padding: 11px 13px;
+      border: 1px solid var(--border);
+      border-radius: 15px;
+      background: #f7fafc;
+      color: var(--text);
+      font: inherit;
+      font-size: 14.5px;
+      line-height: 1.5;
+      resize: none;
+    }
+
+    .composer textarea::placeholder { color: #9aabb7; }
+    .composer textarea:focus { outline: none; border-color: #9fd4dc; background: #fff; }
+
+    .composer-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 44px;
+      flex-shrink: 0;
+      padding: 0 18px;
+      border: 0;
+      border-radius: 15px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 14px;
+      font-weight: 650;
+      box-shadow: 0 4px 10px #087e8b18;
+      touch-action: manipulation;
+    }
+
+    .composer-button:disabled { opacity: .55; box-shadow: none; cursor: default; }
+
+    .icon-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 44px;
+      height: 44px;
+      flex-shrink: 0;
+      border: 1px solid #d4e7eb;
+      border-radius: 15px;
+      background: #eff7f9;
+      color: var(--accent-dark);
+      touch-action: manipulation;
+    }
+
+    .icon-button[disabled] { opacity: .55; cursor: default; }
+
+    :where(a, button, textarea):focus-visible { outline: 3px solid #168998; outline-offset: 2px; }
+
+    @keyframes bubble-in {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @media (hover: hover) {
+      .chip:hover { background: #deeff3; }
+      .composer-button:hover { background: var(--accent-dark); }
+      .icon-button:hover { background: #deeff3; }
+      .copy-button:hover { background: #eff7f9; color: var(--accent-dark); }
+      .message.in .file-card:hover { background: #f7fbfc; }
+      .message.out .file-card:hover { background: var(--accent-dark); }
+    }
+
+    .chip:active { background: #d1e7ec; }
+    .composer-button:active { background: #044f58; }
+    .icon-button:active { background: #d1e7ec; }
+
+    @media (max-width: 480px) {
+      /* 16px 可避免 iOS Safari 聚焦输入框时自动放大页面 */
+      .composer textarea { font-size: 16px; }
+      .bubble { font-size: 15px; }
+      .message { max-width: 88%; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .message { animation: none; }
+      .chip, .composer-button, .icon-button, .file-card, .progress-bar { transition: none; }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-icon" aria-hidden="true">
+          <svg class="icon" viewBox="0 0 24 24">
+            <path d="M7 16V4m-4 4 4-4 4 4M17 8v12m-4-4 4 4 4-4" />
+          </svg>
+        </span>
+        <span>
+          <span class="brand-name">PyDrop</span>
+          <span class="brand-sub">与电脑局域网互传</span>
+        </span>
+      </div>
+      <div class="topbar-actions">
+        <a class="chip" href="/files">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M3 7h5l2 2h11v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z" />
+          </svg>
+          共享文件
+        </a>
+        <button type="button" class="chip" id="chat-clear">清空</button>
+      </div>
+    </header>
+    <div class="chat" id="chat">
+      <ol class="messages" id="messages" aria-live="polite">__MESSAGES__</ol>
+    </div>
+    <div class="composer-wrap">
+      <p class="composer-status" id="composer-status" role="status"></p>
+      <div class="progress" id="progress" hidden><span class="progress-bar" id="progress-bar"></span></div>
+      <form class="composer" id="composer" method="post" enctype="multipart/form-data" action="/">
+        <button type="button" class="icon-button" id="pick-file" title="选择文件并发送到电脑"
+          aria-label="选择文件并发送到电脑">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M21.4 11.05 12.6 19.85a5 5 0 0 1-7.07-7.07l8.49-8.49a3.5 3.5 0 0 1 4.95 4.95l-8.49 8.49a2 2 0 0 1-2.83-2.83l7.78-7.78" />
+          </svg>
+        </button>
+        <input type="file" id="file-input" name="file" multiple hidden>
+        <textarea id="text-input" name="text" rows="1" maxlength="50000"
+          placeholder="输入文本…" aria-label="要发送到电脑的文本"></textarea>
+        <button type="submit" class="composer-button" id="send-button">发送</button>
+      </form>
+    </div>
+  </div>
+  <script>
+    const messagesEl = document.getElementById("messages");
+    const chatEl = document.getElementById("chat");
+    const composer = document.getElementById("composer");
+    const textInput = document.getElementById("text-input");
+    const sendButton = document.getElementById("send-button");
+    const pickFileButton = document.getElementById("pick-file");
+    const fileInput = document.getElementById("file-input");
+    const statusEl = document.getElementById("composer-status");
+    const progressEl = document.getElementById("progress");
+    const progressBar = document.getElementById("progress-bar");
+
+    const FILE_ICON =
+      '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">' +
+      '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6" /></svg>';
+
+    let lastId = Number("__LAST_ID__") || 0;
+    let chatVersion = Number("__CHAT_VERSION__") || 1;
+    const renderedIds = new Set();
+    let statusTimer = null;
+
+    function setStatus(message, isError = false) {
+      window.clearTimeout(statusTimer);
+      statusEl.textContent = message || "";
+      statusEl.classList.toggle("is-error", Boolean(isError));
+      if (message) {
+        statusTimer = window.setTimeout(() => {
+          statusEl.textContent = "";
+          statusEl.classList.remove("is-error");
+        }, 4000);
+      }
+    }
+
+    function formatSize(size) {
+      const units = ["B", "KB", "MB", "GB"];
+      let value = Number(size) || 0;
+      let unit = units[0];
+      for (const candidate of units) {
+        unit = candidate;
+        if (value < 1024 || candidate === "GB") break;
+        value /= 1024;
+      }
+      return `${value.toFixed(unit === "B" ? 0 : 1)} ${unit}`;
+    }
+
+    function clockText(seconds) {
+      const date = new Date((Number(seconds) || 0) * 1000);
+      if (Number.isNaN(date.getTime())) return "";
+      return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    }
+
+    function scrollToEnd(force) {
+      const distance = chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight;
+      if (force || distance < 120) chatEl.scrollTop = chatEl.scrollHeight;
+    }
+
+    function messageElement(message) {
+      const outgoing = message.sender === "phone";
+      const item = document.createElement("li");
+      item.className = "message " + (outgoing ? "out" : "in");
+      item.dataset.id = message.id;
+
+      const meta = document.createElement("p");
+      meta.className = "message-meta";
+      const who = document.createElement("span");
+      who.textContent = `${outgoing ? "本机" : "电脑"} · ${clockText(message.time)}`;
+      meta.append(who);
+
+      if (message.kind === "file") {
+        const card = document.createElement("a");
+        card.className = "file-card";
+        card.href = message.url;
+        card.setAttribute("download", "");
+        const icon = document.createElement("span");
+        icon.className = "file-icon";
+        icon.setAttribute("aria-hidden", "true");
+        icon.innerHTML = FILE_ICON;
+        const info = document.createElement("span");
+        info.className = "file-info";
+        const name = document.createElement("span");
+        name.className = "file-name";
+        name.textContent = message.name;
+        const size = document.createElement("span");
+        size.className = "file-size";
+        size.textContent = `${formatSize(message.size)} · 点击下载`;
+        info.append(name, size);
+        card.append(icon, info);
+        item.append(meta, card);
+        return item;
+      }
+
+      const copyButton = document.createElement("button");
+      copyButton.type = "button";
+      copyButton.className = "copy-button";
+      copyButton.textContent = "复制";
+      meta.append(copyButton);
+
+      const bubble = document.createElement("div");
+      bubble.className = "bubble";
+      bubble.textContent = message.text;
+      item.append(meta, bubble);
+      return item;
+    }
+
+    function appendMessage(message) {
+      if (!message || renderedIds.has(message.id)) return;
+      renderedIds.add(message.id);
+      if (message.id > lastId) lastId = message.id;
+      messagesEl.append(messageElement(message));
+    }
+
+    function resetMessages(version) {
+      renderedIds.clear();
+      lastId = 0;
+      chatVersion = version;
+      messagesEl.textContent = "";
+    }
+
+    async function copyText(text, element) {
+      if (navigator.clipboard && window.isSecureContext) {
+        try {
+          await navigator.clipboard.writeText(text);
+          return true;
+        } catch (error) {
+          // 继续尝试下方的兼容方案
+        }
+      }
+      // 局域网 HTTP 页面没有剪贴板 API，改用选区加 execCommand。
+      try {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        if (document.execCommand("copy")) {
+          selection.removeAllRanges();
+          return true;
+        }
+      } catch (error) {
+        // 保留选中状态，提示用户手动复制
+      }
+      return false;
+    }
+
+    messagesEl.addEventListener("click", async (event) => {
+      const button = event.target.closest(".copy-button");
+      if (!button) return;
+      const message = button.closest(".message");
+      const bubble = message ? message.querySelector(".bubble") : null;
+      if (!bubble) return;
+      const copied = await copyText(bubble.textContent, bubble);
+      button.textContent = copied ? "已复制" : "长按复制";
+      window.setTimeout(() => {
+        button.textContent = "复制";
+      }, 1800);
+    });
+
+    function resizeInput() {
+      textInput.style.height = "auto";
+      textInput.style.height = `${Math.min(textInput.scrollHeight, 132)}px`;
+    }
+
+    textInput.addEventListener("input", resizeInput);
+    textInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        if (composer.requestSubmit) {
+          composer.requestSubmit();
+        } else {
+          composer.dispatchEvent(new Event("submit", { cancelable: true }));
+        }
+      }
+    });
+
+    composer.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const value = textInput.value;
+      if (!value.trim()) {
+        setStatus("请输入要发送的文本。", true);
+        textInput.focus();
+        return;
+      }
+      sendButton.disabled = true;
+      try {
+        const response = await fetch("/text", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ text: value }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.ok) {
+          throw new Error(result.error || "发送失败，请稍后重试。");
+        }
+        textInput.value = "";
+        resizeInput();
+        appendMessage(result.message);
+        scrollToEnd(true);
+        setStatus("已发送到电脑。");
+      } catch (error) {
+        setStatus(error.message || "发送失败，请稍后重试。", true);
+      } finally {
+        sendButton.disabled = false;
+        textInput.focus();
+      }
+    });
+
+    function showProgress(percent, message) {
+      progressEl.hidden = false;
+      progressBar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+      setStatus(message);
+    }
+
+    function hideProgress() {
+      progressEl.hidden = true;
+      progressBar.style.width = "0%";
+    }
+
+    function uploadFiles(files) {
+      const form = new FormData();
+      files.forEach((file) => form.append("file", file, file.name));
+      const request = new XMLHttpRequest();
+      request.open("POST", "/");
+      request.setRequestHeader("Accept", "application/json");
+      request.upload.addEventListener("progress", (event) => {
+        if (!event.lengthComputable) return;
+        showProgress((event.loaded / event.total) * 100, `正在上传 ${files.length} 个文件…`);
+      });
+      request.addEventListener("load", () => {
+        hideProgress();
+        let result = {};
+        try {
+          result = JSON.parse(request.responseText);
+        } catch (error) {
+          result = {};
+        }
+        if (request.status !== 200 || !result.ok) {
+          setStatus(result.error || "上传失败，请稍后重试。", true);
+          return;
+        }
+        (result.messages || []).forEach(appendMessage);
+        scrollToEnd(true);
+        setStatus(`已发送 ${files.length} 个文件到电脑。`);
+      });
+      request.addEventListener("error", () => {
+        hideProgress();
+        setStatus("上传失败，请检查网络后重试。", true);
+      });
+      request.addEventListener("abort", () => {
+        hideProgress();
+        setStatus("已取消上传。", true);
+      });
+      showProgress(0, `准备上传 ${files.length} 个文件…`);
+      request.send(form);
+    }
+
+    pickFileButton.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", () => {
+      const files = Array.from(fileInput.files || []);
+      fileInput.value = "";
+      if (files.length) uploadFiles(files);
+    });
+
+    document.getElementById("chat-clear").addEventListener("click", async () => {
+      if (!window.confirm("清空当前会话的聊天记录？清空后无法恢复。")) return;
+      try {
+        const response = await fetch("/chat/clear", {
+          method: "POST",
+          headers: { Accept: "application/json" },
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.ok) {
+          throw new Error(result.error || "清空失败，请稍后重试。");
+        }
+        const version = Number(result.version);
+        if (Number.isFinite(version)) resetMessages(version);
+        setStatus("聊天记录已清空。");
+      } catch (error) {
+        setStatus(error.message || "清空失败，请稍后重试。", true);
+      }
+    });
+
+    async function pollMessages() {
+      try {
+        const response = await fetch(
+          `/chat/messages?since=${lastId}&version=${chatVersion}`,
+          { cache: "no-store" }
+        );
+        if (!response.ok) return;
+        const result = await response.json();
+        const version = Number(result.version);
+        if (Number.isFinite(version) && version !== chatVersion) {
+          resetMessages(version);
+        }
+        const messages = result.messages || [];
+        if (!messages.length) return;
+        messages.forEach(appendMessage);
+        scrollToEnd();
+      } catch (error) {
+        // 网络短暂中断时保持界面不变，下一轮会自动重试
+      }
+    }
+
+    resizeInput();
+    chatEl.scrollTop = chatEl.scrollHeight;
+    pollMessages();
+    window.setInterval(pollMessages, 2000);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) pollMessages();
+    });
+  </script>
+</body>
+
+</html>"""
+
+
+FILES_PAGE = """<!doctype html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f3f7fa">
-  <title>PyDrop - 局域网文件互传</title>
+  <title>共享文件 - PyDrop</title>
   <style>
     :root {
       color-scheme: light;
@@ -63,73 +800,56 @@ PAGE_HEAD = """<!doctype html>
       -webkit-tap-highlight-color: transparent;
     }
 
-    main {
-      width: min(100% - 40px, 760px);
-      margin: 0 auto;
-      padding: 36px 0 28px;
-    }
+    main { width: min(100% - 32px, 640px); margin: 0 auto; padding: 24px 0 40px; }
 
-    .brand, .brand-name, .section-heading {
-      display: flex;
-      align-items: center;
-    }
-
-    .brand { justify-content: space-between; gap: 16px; }
-    .brand-name { gap: 10px; font-size: 21px; font-weight: 750; }
+    .brand { display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 750; }
 
     .brand-icon {
       display: grid;
       place-items: center;
-      width: 40px;
-      height: 40px;
-      border-radius: 13px;
+      width: 36px;
+      height: 36px;
+      border-radius: 12px;
       background: var(--accent);
       color: #fff;
       box-shadow: 0 5px 12px #087e8b20;
     }
 
     .icon {
-      width: 22px;
-      height: 22px;
+      width: 20px;
+      height: 20px;
       fill: none;
       stroke: currentColor;
       stroke-width: 1.8;
       stroke-linecap: round;
       stroke-linejoin: round;
-      flex-shrink: 0;
     }
 
-    .network-badge {
-      padding: 5px 11px;
-      border: 1px solid #cce3e7;
+    .back {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 36px;
+      margin: 18px 0;
+      padding: 6px 14px;
+      border: 1px solid #d4e7eb;
       border-radius: 999px;
+      background: #eff7f9;
       color: var(--accent-dark);
-      background: #edf8fa;
-      font-size: 12px;
-      white-space: nowrap;
+      font-size: 13px;
+      font-weight: 650;
+      text-decoration: none;
     }
-
-    .intro { padding: 34px 0 24px; }
-
-    h1 {
-      margin: 0;
-      font-size: clamp(27px, 5vw, 36px);
-      line-height: 1.35;
-      letter-spacing: -0.8px;
-    }
-
-    .subtitle { margin: 12px 0 0; color: var(--muted); font-size: 14px; }
 
     .card {
-      margin-bottom: 20px;
-      padding: 26px;
+      padding: 22px;
       background: #fff;
       border: 1px solid var(--border);
       border-radius: 22px;
       box-shadow: 0 8px 30px #25465b06;
     }
 
-    .section-heading { gap: 12px; margin-bottom: 20px; }
+    .section-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
 
     .section-number {
       display: grid;
@@ -145,107 +865,8 @@ PAGE_HEAD = """<!doctype html>
       font-variant-numeric: tabular-nums;
     }
 
-    h2 { margin: 0; font-size: 17px; font-weight: 650; }
+    h1 { margin: 0; font-size: 17px; font-weight: 650; }
     .section-description { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
-
-    .upload-area {
-      padding: 24px;
-      border: 1px dashed #b7d5dd;
-      border-radius: 16px;
-      background: #f7fbfc;
-      text-align: center;
-    }
-
-    .upload-icon {
-      display: grid;
-      place-items: center;
-      width: 48px;
-      height: 48px;
-      margin: 0 auto 12px;
-      border-radius: 15px;
-      background: #e4f2f5;
-      color: var(--accent);
-    }
-
-    .upload-label { display: block; font-size: 15px; font-weight: 600; }
-    .upload-hint { margin: 4px 0 18px; color: var(--muted); font-size: 12px; }
-
-    input[type="file"] {
-      display: block;
-      width: 100%;
-      min-width: 0;
-      padding: 6px;
-      border: 1px solid var(--border);
-      border-radius: 11px;
-      background: #fff;
-      color: var(--muted);
-      font: inherit;
-      font-size: 13px;
-      text-align: left;
-    }
-
-    input[type="file"]::file-selector-button {
-      margin-right: 12px;
-      padding: 9px 14px;
-      border: 0;
-      border-radius: 7px;
-      background: #eaf3f6;
-      color: var(--accent-dark);
-      font: inherit;
-      font-weight: 600;
-      cursor: pointer;
-    }
-
-    button, .download {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      min-height: 44px;
-      border: 1px solid transparent;
-      border-radius: 11px;
-      font: inherit;
-      font-size: 14px;
-      font-weight: 600;
-      text-decoration: none;
-      cursor: pointer;
-      transition: background-color 160ms ease, box-shadow 160ms ease;
-      touch-action: manipulation;
-    }
-
-    button {
-      width: 100%;
-      margin-top: 16px;
-      padding: 12px 20px;
-      background: var(--accent);
-      color: #fff;
-      box-shadow: 0 4px 10px #087e8b18;
-    }
-
-    .download {
-      flex-shrink: 0;
-      min-width: 72px;
-      padding: 8px 16px;
-      border-color: #d4e7eb;
-      background: #eff7f9;
-      color: var(--accent-dark);
-      white-space: nowrap;
-    }
-
-    :where(a, button, input):focus-visible {
-      outline: 3px solid #168998;
-      outline-offset: 4px;
-    }
-
-    @media (hover: hover) {
-      button:hover { background: var(--accent-dark); box-shadow: 0 6px 16px #087e8b26; }
-      .download:hover { background: #deeff3; }
-      .file-name:hover { color: var(--accent); text-decoration: underline; }
-      input[type="file"]::file-selector-button:hover { background: #deeff3; }
-    }
-
-    button:active { background: #044f58; }
-    .download:active { background: #d1e7ec; }
 
     ul { padding: 0; margin: 0; list-style: none; }
 
@@ -253,7 +874,7 @@ PAGE_HEAD = """<!doctype html>
       display: flex;
       align-items: center;
       gap: 16px;
-      padding: 18px 0;
+      padding: 16px 0;
       border-top: 1px solid #edf1f4;
     }
 
@@ -278,6 +899,23 @@ PAGE_HEAD = """<!doctype html>
       font-variant-numeric: tabular-nums;
     }
 
+    .download {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 72px;
+      min-height: 40px;
+      padding: 8px 16px;
+      border: 1px solid #d4e7eb;
+      border-radius: 11px;
+      background: #eff7f9;
+      color: var(--accent-dark);
+      font-size: 14px;
+      font-weight: 600;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+
     .empty {
       margin: 0;
       padding: 32px 16px;
@@ -289,312 +927,17 @@ PAGE_HEAD = """<!doctype html>
       text-align: center;
     }
 
-    footer { padding: 4px 12px; color: var(--muted); font-size: 12px; text-align: center; }
+    @media (hover: hover) {
+      .back:hover { background: #deeff3; }
+      .download:hover { background: #deeff3; }
+      .file-name:hover { color: var(--accent); text-decoration: underline; }
+    }
 
     @media (max-width: 480px) {
-      main { width: calc(100% - 28px); padding-top: 22px; }
-      .intro { padding: 28px 2px 22px; }
-      .card { padding: 20px 16px; border-radius: 18px; }
-      .upload-area { padding: 20px 14px; }
+      main { width: calc(100% - 24px); }
+      .card { padding: 18px 14px; }
       li { gap: 12px; }
       .download { min-width: 64px; padding-inline: 12px; }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      button, .download { transition: none; }
-    }
-  </style>
-</head>
-
-<body>
-  <main>
-    <header class="brand">
-      <div class="brand-name">
-        <span class="brand-icon" aria-hidden="true">
-          <svg class="icon" viewBox="0 0 24 24">
-            <path d="M7 16V4m-4 4 4-4 4 4M17 8v12m-4-4 4 4 4-4" />
-          </svg>
-        </span>
-        PyDrop
-      </div>
-      <span class="network-badge">局域网文件互传</span>
-    </header>
-    <div class="intro">
-      <h1>文件互传，轻松一点。</h1>
-      <p class="subtitle">让文件在手机与电脑之间，自由来往。</p>
-    </div>
-    <section class="card" aria-labelledby="upload-heading">
-      <div class="section-heading">
-        <span class="section-number" aria-hidden="true">01</span>
-        <div>
-          <h2 id="upload-heading">上传文件</h2>
-          <p class="section-description">将此设备的文件发送到电脑</p>
-        </div>
-      </div>
-      <form method="post" enctype="multipart/form-data">
-        <div class="upload-area">
-          <span class="upload-icon" aria-hidden="true">
-            <svg class="icon" viewBox="0 0 24 24">
-              <path d="M12 16V3m-5 5 5-5 5 5M4 15v5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5" />
-            </svg>
-          </span>
-          <label class="upload-label" for="upload-file">选择要分享的文件</label>
-          <p class="upload-hint" id="upload-hint">照片、视频、文档，可一次选择多个文件</p>
-          <input id="upload-file" type="file" name="file" aria-describedby="upload-hint" multiple required>
-        </div>
-        <button type="submit">
-          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 19V5m-5 5 5-5 5 5" />
-          </svg>
-          上传到电脑
-        </button>
-      </form>
-    </section>
-    <section class="card" aria-labelledby="files-heading">
-      <div class="section-heading">
-        <span class="section-number" aria-hidden="true">02</span>
-        <div>
-          <h2 id="files-heading">共享文件</h2>
-          <p class="section-description">点击文件名或下载按钮，保存到此设备</p>
-        </div>
-      </div>
-      {files}
-    </section>
-    <footer>连接同一局域网，即可上传与下载</footer>
-  </main>
-  <script>
-    const uploadInput = document.getElementById("upload-file");
-    const uploadHint = document.getElementById("upload-hint");
-    const defaultHint = uploadHint.textContent;
-    uploadInput.addEventListener("change", () => {
-      const count = uploadInput.files.length;
-      if (count === 0) {
-        uploadHint.textContent = defaultHint;
-        return;
-      }
-      const total = Array.from(uploadInput.files).reduce(
-        (sum, file) => sum + file.size,
-        0
-      );
-      uploadHint.textContent = `已选择 ${count} 个文件，共 ${formatSize(total)}`;
-    });
-
-    function formatSize(size) {
-      const units = ["B", "KB", "MB", "GB"];
-      let value = size;
-      let unit = units[0];
-      for (const candidate of units) {
-        unit = candidate;
-        if (value < 1024 || candidate === "GB") break;
-        value /= 1024;
-      }
-      const digits = unit === "B" ? 0 : 1;
-      return `${value.toFixed(digits)} ${unit}`;
-    }
-  </script>
-</body>
-
-</html>"""
-
-UPLOAD_SUCCESS_PAGE = """<!doctype html>
-<html lang="zh-CN">
-
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f3f7fa">
-  <title>上传完成 - PyDrop</title>
-  <style>
-    :root {
-      color-scheme: light;
-      --text: #1e3445;
-      --muted: #617582;
-      --accent: #087e8b;
-      --accent-dark: #05626d;
-      --border: #e1eaf0;
-    }
-
-    * { box-sizing: border-box; }
-
-    body {
-      display: grid;
-      min-height: 100vh;
-      margin: 0;
-      background:
-        radial-gradient(ellipse at 0% 0%, #deeff4 0, transparent 55%),
-        radial-gradient(ellipse at 100% 30%, #e8edf9 0, transparent 50%),
-        #f3f7fa;
-      color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
-        "PingFang SC", "Microsoft YaHei", sans-serif;
-      line-height: 1.6;
-      -webkit-tap-highlight-color: transparent;
-    }
-
-    main {
-      width: min(100% - 40px, 560px);
-      margin: auto;
-      padding: 32px 0;
-    }
-
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      margin: 0 0 20px 4px;
-      font-size: 18px;
-      font-weight: 750;
-    }
-
-    .brand-icon {
-      display: grid;
-      place-items: center;
-      width: 36px;
-      height: 36px;
-      border-radius: 12px;
-      background: var(--accent);
-      color: #fff;
-      box-shadow: 0 5px 12px #087e8b20;
-    }
-
-    .icon {
-      width: 21px;
-      height: 21px;
-      fill: none;
-      stroke: currentColor;
-      stroke-width: 1.8;
-      stroke-linecap: round;
-      stroke-linejoin: round;
-    }
-
-    .card {
-      padding: 40px;
-      border: 1px solid var(--border);
-      border-radius: 24px;
-      background: #fff;
-      box-shadow: 0 14px 44px #25465b0b;
-      text-align: center;
-    }
-
-    .success-icon {
-      display: grid;
-      place-items: center;
-      width: 72px;
-      height: 72px;
-      margin: 0 auto 20px;
-      border-radius: 50%;
-      background: #e7f6f3;
-      color: #07836f;
-      box-shadow: 0 0 0 8px #f3faf8;
-      animation: arrive 360ms ease-out;
-    }
-
-    .success-icon .icon { width: 34px; height: 34px; stroke-width: 2.2; }
-
-    h1 {
-      margin: 0;
-      font-size: clamp(26px, 7vw, 34px);
-      line-height: 1.3;
-      letter-spacing: -0.6px;
-    }
-
-    .subtitle { margin: 9px 0 26px; color: var(--muted); font-size: 14px; }
-
-    .file-list { display: grid; gap: 10px; }
-
-    .file-summary {
-      display: flex;
-      align-items: center;
-      gap: 13px;
-      min-width: 0;
-      padding: 15px 16px;
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      background: #f8fbfc;
-      text-align: left;
-    }
-
-    .file-icon {
-      display: grid;
-      place-items: center;
-      width: 42px;
-      height: 42px;
-      flex-shrink: 0;
-      border-radius: 11px;
-      background: #e7f2f5;
-      color: var(--accent);
-    }
-
-    .file-details { min-width: 0; flex: 1; }
-
-    .file-name {
-      display: block;
-      font-size: 14px;
-      font-weight: 650;
-      line-height: 1.4;
-      overflow-wrap: anywhere;
-    }
-
-    .file-meta { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
-
-    .actions { display: flex; gap: 12px; margin-top: 26px; }
-
-    .button {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      min-height: 46px;
-      flex: 1;
-      padding: 11px 18px;
-      border: 1px solid #d4e7eb;
-      border-radius: 11px;
-      background: #eff7f9;
-      color: var(--accent-dark);
-      font-size: 14px;
-      font-weight: 650;
-      text-decoration: none;
-      transition: background-color 160ms ease, box-shadow 160ms ease;
-      touch-action: manipulation;
-    }
-
-    .button.primary {
-      border-color: var(--accent);
-      background: var(--accent);
-      color: #fff;
-      box-shadow: 0 4px 10px #087e8b18;
-    }
-
-    .button .icon { width: 18px; height: 18px; }
-
-    .button:focus-visible { outline: 3px solid #168998; outline-offset: 4px; }
-
-    .hint { margin: 18px 0 0; color: var(--muted); font-size: 12px; }
-
-    @keyframes arrive {
-      from { opacity: 0; transform: scale(.78); }
-      to { opacity: 1; transform: scale(1); }
-    }
-
-    @media (hover: hover) {
-      .button:hover { background: #deeff3; }
-      .button.primary:hover { background: var(--accent-dark); box-shadow: 0 6px 16px #087e8b26; }
-    }
-
-    .button:active { background: #d1e7ec; }
-    .button.primary:active { background: #044f58; }
-
-    @media (max-width: 480px) {
-      main { width: calc(100% - 28px); padding: 22px 0; }
-      .brand { margin-bottom: 16px; }
-      .card { padding: 32px 20px 26px; border-radius: 20px; }
-      .actions { flex-direction: column; }
-      .button { flex: none; width: 100%; }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      .success-icon { animation: none; }
-      .button { transition: none; }
     }
   </style>
 </head>
@@ -609,29 +952,41 @@ UPLOAD_SUCCESS_PAGE = """<!doctype html>
       </span>
       PyDrop
     </header>
-    <section class="card" aria-labelledby="success-heading">
-      <div class="success-icon" aria-hidden="true">
-        <svg class="icon" viewBox="0 0 24 24"><path d="m5 12 4.5 4.5L19 7" /></svg>
+    <a class="back" href="/">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m15 18-6-6 6-6" />
+      </svg>
+      返回聊天
+    </a>
+    <section class="card">
+      <div class="section-heading">
+        <span class="section-number" aria-hidden="true">__COUNT__</span>
+        <div>
+          <h1>共享文件</h1>
+          <p class="section-description">电脑共享目录中的文件，点击文件名或下载按钮保存到此设备</p>
+        </div>
       </div>
-      <h1 id="success-heading">上传完成</h1>
-      <p class="subtitle" role="status">{summary}</p>
-      <div class="file-list">
-        {files}
-      </div>
-      <div class="actions">
-        <a class="button primary" href="/">
-          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="m9 18-6-6 6-6M3 12h12a6 6 0 0 1 6 6" />
-          </svg>
-          返回首页
-        </a>
-      </div>
-      <p class="hint">现在可以关闭此页面，文件会保留在电脑中</p>
+      __FILES__
     </section>
   </main>
 </body>
 
 </html>"""
+
+FILE_ICON_HTML = (
+    '<span class="file-icon" aria-hidden="true">'
+    '<svg class="icon" viewBox="0 0 24 24">'
+    '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6" />'
+    "</svg></span>"
+)
+
+
+def format_size(size):
+    """把字节数格式化成便于阅读的字符串。"""
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.1f} {unit}" if unit != "B" else f"{size} B"
+        size /= 1024
 
 
 def local_ip():
@@ -653,9 +1008,9 @@ def resource_path(name):
     return base_dir / name
 
 
-def open_shared_dir():
-    """使用当前平台的文件管理器打开共享目录。"""
-    path = str(SHARED_DIR)
+def open_local_path(path):
+    """使用当前平台的默认程序打开文件或目录。"""
+    path = str(path)
     if sys.platform.startswith("win"):
         os.startfile(path)
     elif sys.platform == "darwin":
@@ -663,8 +1018,239 @@ def open_shared_dir():
     else:
         opener = shutil.which("xdg-open")
         if not opener:
-            raise RuntimeError("找不到 xdg-open，无法打开文件管理器")
+            raise RuntimeError("找不到 xdg-open，无法打开文件")
         subprocess.Popen([opener, path])
+
+
+def open_shared_dir():
+    """使用当前平台的文件管理器打开共享目录。"""
+    open_local_path(SHARED_DIR)
+
+
+def place_shared_file(source):
+    """把本机文件放进共享目录，返回共享目录中的目标路径。
+
+    同名且大小相同的文件视为同一个文件，不会重复复制；同名但内容长度不同
+    时另存为带随机后缀的文件名，避免覆盖共享目录中的已有文件。
+    """
+    source = Path(source)
+    target = SHARED_DIR / source.name
+    if target.exists():
+        try:
+            if source.resolve() == target.resolve():
+                return target
+            if target.stat().st_size == source.stat().st_size:
+                return target
+        except OSError:
+            pass
+        target = SHARED_DIR / f"{source.stem}_{uuid.uuid4().hex[:8]}{source.suffix}"
+    shutil.copy2(source, target)
+    return target
+
+
+def message_html(message):
+    """把一条聊天记录渲染成网页中的气泡（网页端就是手机端）。"""
+    outgoing = message["sender"] == "phone"
+    side = "out" if outgoing else "in"
+    clock = time.strftime("%H:%M", time.localtime(message.get("time") or time.time()))
+    who = "本机" if outgoing else "电脑"
+    meta = f"<span>{who} · {clock}</span>"
+    if message["kind"] == "file":
+        href = html.escape("/files/" + quote(message["name"]), quote=True)
+        body = (
+            f'<a class="file-card" href="{href}" download>'
+            f"{FILE_ICON_HTML}"
+            '<span class="file-info">'
+            f'<span class="file-name">{html.escape(message["name"])}</span>'
+            f'<span class="file-size">{format_size(message["size"])} · 点击下载</span>'
+            "</span></a>"
+        )
+    else:
+        meta += '<button type="button" class="copy-button">复制</button>'
+        body = f'<div class="bubble">{html.escape(message["text"])}</div>'
+    return (
+        f'<li class="message {side}" data-id="{message["id"]}">'
+        f'<p class="message-meta">{meta}</p>{body}</li>'
+    )
+
+
+def public_message(message):
+    """网页接口返回的消息结构，去掉本机文件路径。"""
+    payload = {key: value for key, value in message.items() if key != "path"}
+    if message["kind"] == "file":
+        payload["url"] = "/files/" + quote(message["name"])
+    return payload
+
+
+class ChatLog:
+    """会话级聊天记录。
+
+    文本和文件消息都只保存在内存中：不写入磁盘、不保留历史记录，程序退出后
+    即消失。共享目录里的文件会作为电脑发出的消息出现在聊天窗口中，方便手机
+    直接下载；这类消息只回填最近修改的一部分，其余文件仍可在共享文件页面下载。
+    """
+
+    MAX_MESSAGES = 400  # 防止长时间运行后内存无限增长
+    BACKFILL_LIMIT = 40  # 共享目录回填进聊天窗口的最大文件数
+    SENDERS = ("phone", "computer")
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._messages = []
+        self._next_id = 1
+        self._version = 1
+        self._shared_dir = None
+        self._known_files = set()
+
+    # ---- 写入（调用 _append 前必须持有锁）----
+    def _append(self, message):
+        message["id"] = self._next_id
+        message["time"] = time.time()
+        self._next_id += 1
+        self._messages.append(message)
+        overflow = len(self._messages) - self.MAX_MESSAGES
+        if overflow > 0:
+            del self._messages[:overflow]
+        return dict(message)
+
+    def add_text(self, sender, text):
+        """记录一条文本消息并返回副本；内容不合法时抛出异常。"""
+        if sender not in self.SENDERS:
+            raise ValueError("未知的发送方")
+        if not isinstance(text, str):
+            raise TypeError("文本内容格式不正确")
+        if not text.strip():
+            raise ValueError("文本内容不能为空")
+        if len(text) > MAX_TEXT_LENGTH:
+            raise ValueError(f"文本不能超过 {MAX_TEXT_LENGTH} 个字符")
+        with self._lock:
+            return self._append(
+                {"kind": "text", "sender": sender, "source": "chat", "text": text}
+            )
+
+    def add_file(self, sender, name, size, path=None, source="chat"):
+        """记录一条文件消息；文件本体已经保存在共享目录中。"""
+        if sender not in self.SENDERS:
+            raise ValueError("未知的发送方")
+        if not name:
+            raise ValueError("文件名不能为空")
+        with self._lock:
+            self._known_files.add(name)
+            return self._append(
+                {
+                    "kind": "file",
+                    "sender": sender,
+                    "source": source,
+                    "name": name,
+                    "size": int(size),
+                    "path": str(path) if path else str(SHARED_DIR / name),
+                }
+            )
+
+    def clear(self):
+        """清空当前会话的聊天记录，只影响内存。"""
+        with self._lock:
+            self._messages.clear()
+            self._version += 1
+            return self._version
+
+    # ---- 读取 ----
+    def version(self):
+        with self._lock:
+            return self._version
+
+    def snapshot(self, since=0, sources=None):
+        """返回 (版本号, 消息副本列表)，供本机 GUI 使用。"""
+        with self._lock:
+            messages = [
+                dict(message)
+                for message in self._messages
+                if message["id"] > since
+                and (sources is None or message["source"] in sources)
+            ]
+            return self._version, messages
+
+    # ---- 共享目录 ----
+    def sync_shared_files(self, directory):
+        """把共享目录中的文件同步成电脑发出的消息，返回新增数量。"""
+        directory = Path(directory)
+        entries = self._scan_shared_dir(directory)
+        if entries is None:
+            return 0
+
+        with self._lock:
+            first_scan = self._shared_dir != directory
+            if first_scan:
+                self._shared_dir = directory
+                self._known_files = set()
+                self._messages = [
+                    message
+                    for message in self._messages
+                    if message["source"] != "shared"
+                ]
+                self._version += 1
+
+            existing = {name for name, _size, _time, _path in entries}
+            self._known_files &= existing
+            # 文件被移出共享目录后，对应的气泡也一起消失
+            self._messages = [
+                message
+                for message in self._messages
+                if message["source"] != "shared" or message.get("name") in existing
+            ]
+
+            if first_scan and len(entries) > self.BACKFILL_LIMIT:
+                backfill_from = len(entries) - self.BACKFILL_LIMIT
+            else:
+                backfill_from = 0
+
+            added = 0
+            for index, (name, size, _time, path) in enumerate(entries):
+                if name in self._known_files:
+                    continue
+                # 已记录过的文件名不再重复回填，避免每次扫描都产生新气泡
+                self._known_files.add(name)
+                if index < backfill_from:
+                    # 首次扫描只回填最近修改的一部分，其余文件仍可在共享文件页面下载
+                    continue
+                self._append(
+                    {
+                        "kind": "file",
+                        "sender": "computer",
+                        "source": "shared",
+                        "name": name,
+                        "size": size,
+                        "path": str(path),
+                    }
+                )
+                added += 1
+            return added
+
+    @staticmethod
+    def _scan_shared_dir(directory):
+        """按修改时间从早到晚列出共享目录中的文件。"""
+        entries = []
+        try:
+            with os.scandir(directory) as scanner:
+                for entry in scanner:
+                    if entry.name.startswith("."):
+                        continue
+                    try:
+                        if not entry.is_file():
+                            continue
+                        stat = entry.stat()
+                    except OSError:
+                        continue
+                    entries.append(
+                        (entry.name, stat.st_size, stat.st_mtime, Path(entry.path))
+                    )
+        except OSError:
+            return None
+        entries.sort(key=lambda item: item[2])
+        return entries
+
+
+CHAT_LOG = ChatLog()
 
 
 class FileTransferServer(ThreadingHTTPServer):
@@ -686,11 +1272,18 @@ class FileTransferServer(ThreadingHTTPServer):
 
 class App:
     QR_SIZE = 256
+    SEND_PLACEHOLDER = "输入要发送到手机的文本，Ctrl+Enter 发送"
+    CHAT_POLL_MS = 700
+    SHARED_SYNC_SECONDS = 5.0
 
     def __init__(self):
         self.server = None
         self.server_thread = None
         self.feedback_job = None
+        self.chat_poll_job = None
+        self.chat_version = 1
+        self.last_message_id = 0
+        self.last_shared_sync = 0.0
         self.root = tk.Tk()
         self.root.title("PyDrop - 局域网文件互传")
         self.root.configure(bg="#f3f6fa")
@@ -700,6 +1293,7 @@ class App:
         self.start_server()
         self.build_ui()
         self.refresh_address()
+        self.start_chat_polling()
         self.root.update_idletasks()
         self.root.minsize(self.root.winfo_reqwidth(), self.root.winfo_reqheight())
 
@@ -747,6 +1341,8 @@ class App:
             "primary": "#2563eb",
             "primary_active": "#1d4ed8",
             "border": "#dce4ef",
+            "chat": "#f7f9fc",
+            "bubble_in": "#e9eff8",
         }
         family = tkfont.nametofont("TkDefaultFont").actual("family")
         self.body_font = (family, 10)
@@ -759,10 +1355,11 @@ class App:
         content = tk.Frame(self.root, bg=colors["background"], padx=24, pady=24)
         content.pack(fill="both", expand=True)
         content.columnconfigure(1, weight=1)
+        content.columnconfigure(2, weight=1)
         content.rowconfigure(1, weight=1)
 
         header = tk.Frame(content, bg=colors["background"])
-        header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 20))
+        header.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 20))
         header.columnconfigure(0, weight=1)
 
         tk.Label(
@@ -785,7 +1382,7 @@ class App:
             bg=colors["background"],
             fg=colors["muted"],
             font=self.body_font,
-        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 0))
 
         qr_card = tk.Frame(
             content,
@@ -815,7 +1412,7 @@ class App:
         self.qr_canvas.pack(expand=True, pady=8)
         tk.Label(
             qr_card,
-            text="使用手机相机扫描\n在浏览器中上传或下载文件",
+            text="使用手机相机扫描\n在浏览器中互传文件与文本",
             bg=colors["card"],
             fg=colors["muted"],
             font=self.small_font,
@@ -864,7 +1461,7 @@ class App:
             bg=colors["background"],
             fg=colors["muted"],
             font=self.small_font,
-            wraplength=300,
+            wraplength=280,
             justify="left",
         ).grid(row=6, column=0, sticky="w", pady=(8, 12))
         folder_actions = tk.Frame(details, bg=colors["background"])
@@ -875,6 +1472,115 @@ class App:
         self.action_button(folder_actions, "选择共享目录", self.choose_folder).pack(
             side="left"
         )
+
+        chat_card = tk.Frame(
+            content,
+            bg=colors["card"],
+            highlightbackground=colors["border"],
+            highlightthickness=1,
+            padx=16,
+            pady=16,
+        )
+        chat_card.grid(row=1, column=2, sticky="nsew", padx=(20, 0))
+        chat_card.columnconfigure(0, weight=1)
+        chat_card.rowconfigure(2, weight=1)
+
+        chat_head = tk.Frame(chat_card, bg=colors["card"])
+        chat_head.grid(row=0, column=0, sticky="ew")
+        chat_head.columnconfigure(0, weight=1)
+        tk.Label(
+            chat_head,
+            text="聊天窗口",
+            bg=colors["card"],
+            fg=colors["text"],
+            font=heading_font,
+        ).grid(row=0, column=0, sticky="w")
+        self.action_button(chat_head, "清空记录", self.clear_chat).grid(
+            row=0, column=1, sticky="e"
+        )
+        tk.Label(
+            chat_card,
+            text="聊天记录只保存在内存里，关闭程序后即消失。",
+            bg=colors["card"],
+            fg=colors["muted"],
+            font=self.small_font,
+            wraplength=310,
+            justify="left",
+        ).grid(row=1, column=0, sticky="w", pady=(2, 10))
+
+        # 边框画在外层 Frame 上：聊天框本身不画焦点框，选中文字时也不会出现描边
+        chat_area = tk.Frame(
+            chat_card,
+            bg=colors["chat"],
+            highlightthickness=1,
+            highlightbackground=colors["border"],
+        )
+        chat_area.grid(row=2, column=0, sticky="nsew")
+        chat_area.columnconfigure(0, weight=1)
+        chat_area.rowconfigure(0, weight=1)
+
+        self.chat_box = tk.Text(
+            chat_area,
+            height=14,
+            width=34,
+            wrap="word",
+            state="disabled",
+            cursor="arrow",
+            font=self.body_font,
+            fg=colors["text"],
+            bg=colors["chat"],
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+            selectborderwidth=0,
+            selectbackground="#bfdbfe",
+            selectforeground=colors["text"],
+            padx=8,
+            pady=8,
+        )
+        self.chat_box.grid(row=0, column=0, sticky="nsew")
+        chat_scroll = tk.Scrollbar(
+            chat_area,
+            command=self.chat_box.yview,
+            orient="vertical",
+            width=10,
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+            troughcolor=colors["chat"],
+            bg=colors["border"],
+            activebackground="#b8c6da",
+        )
+        chat_scroll.grid(row=0, column=1, sticky="ns", padx=(2, 0))
+        self.chat_box.configure(yscrollcommand=chat_scroll.set)
+        self.configure_chat_tags()
+        # 每条消息单独记录，右键菜单可以只复制光标下的那一条
+        self.chat_file_tags = {}
+        self.chat_message_tags = {}
+        self.attach_chat_menu()
+        self.chat_box.bind("<Button-1>", self.on_chat_click)
+        self.chat_box.bind("<Motion>", self.on_chat_motion)
+        self.chat_box.bind("<Leave>", self.on_chat_leave)
+
+        self.text_input = self.text_box(chat_card, height=3)
+        self.text_input.grid(row=3, column=0, sticky="ew", pady=(12, 8))
+        self.text_input.bind("<Control-Return>", self.send_text_shortcut)
+        self.text_input.bind("<Command-Return>", self.send_text_shortcut)
+        self.text_input.bind("<FocusIn>", self.on_input_focus_in)
+        self.text_input.bind("<FocusOut>", self.on_input_focus_out)
+        self.input_placeholder = False
+        self.show_input_placeholder()
+
+        input_actions = tk.Frame(chat_card, bg=colors["card"])
+        input_actions.grid(row=4, column=0, sticky="ew")
+        input_actions.columnconfigure(0, weight=1)
+        self.action_button(
+            input_actions, "选择文件并发送", self.send_file_to_phone
+        ).grid(row=0, column=0, sticky="w")
+        self.action_button(
+            input_actions, "发送文本", self.send_text_to_phone, primary=True
+        ).grid(row=0, column=1, sticky="e")
+
         tk.Label(
             content,
             textvariable=self.status,
@@ -882,7 +1588,7 @@ class App:
             fg=colors["muted"],
             font=self.small_font,
             anchor="w",
-        ).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(18, 0))
+        ).grid(row=2, column=0, columnspan=3, sticky="ew", pady=(18, 0))
 
     def readonly_entry(self, parent, variable):
         """允许选择、复制和水平滚动，避免长地址或路径撑大窗口。"""
@@ -919,9 +1625,7 @@ class App:
             fg=primary_foreground if primary else self.colors["primary"],
             activebackground=self.colors["primary_active"] if primary else "#e6edfa",
             activeforeground=(
-                primary_active_foreground
-                if primary
-                else self.colors["primary_active"]
+                primary_active_foreground if primary else self.colors["primary_active"]
             ),
             disabledforeground=self.colors["muted"],
             relief="flat",
@@ -937,6 +1641,465 @@ class App:
         )
         button.bind("<Return>", lambda _event: button.invoke())
         return button
+
+    def text_box(self, parent, height):
+        """创建可以选中、复制和粘贴的多行输入框。"""
+        box = tk.Text(
+            parent,
+            height=height,
+            width=28,
+            wrap="word",
+            font=self.body_font,
+            fg=self.colors["text"],
+            bg=self.colors["card"],
+            relief="flat",
+            highlightthickness=1,
+            highlightbackground=self.colors["border"],
+            highlightcolor=self.colors["primary"],
+            selectbackground=self.colors["primary"],
+            selectforeground="white",
+            insertbackground=self.colors["text"],
+            padx=10,
+            pady=8,
+            spacing1=2,
+            spacing3=2,
+            undo=True,
+        )
+        self.attach_text_menu(box)
+        return box
+
+    def attach_text_menu(self, box):
+        """为输入框补上右键菜单和显式复制/粘贴快捷键。"""
+        menu = tk.Menu(box, tearoff=False)
+        menu.add_command(label="剪切", command=lambda: box.event_generate("<<Cut>>"))
+        menu.add_command(label="复制", command=lambda: self.copy_widget_selection(box))
+        menu.add_command(label="粘贴", command=lambda: box.event_generate("<<Paste>>"))
+        menu.add_command(label="全选", command=lambda: self.select_all_text(box))
+        menu.add_separator()
+        menu.add_command(label="清空输入", command=self.clear_text_input)
+        for sequence in ("<Button-3>", "<Button-2>", "<Control-Button-1>"):
+            box.bind(sequence, lambda event, m=menu: self.popup_text_menu(event, m))
+        box.bind("<Control-c>", lambda _event: self.copy_widget_selection(box))
+        box.bind("<Command-c>", lambda _event: self.copy_widget_selection(box))
+
+    def popup_text_menu(self, event, menu):
+        try:
+            event.widget.focus_set()
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    @staticmethod
+    def select_all_text(box):
+        box.tag_add("sel", "1.0", "end-1c")
+        box.mark_set("insert", "1.0")
+        box.focus_set()
+
+    @staticmethod
+    def selected_text(box):
+        """返回文本框中的选中内容，没有选中时返回空字符串。"""
+        try:
+            return box.get("sel.first", "sel.last")
+        except tk.TclError:
+            return ""
+
+    def copy_widget_selection(self, box):
+        """复制选中内容；没有选中时复制整个文本框。"""
+        text = self.selected_text(box) or self.widget_text(box)
+        if text:
+            self.write_clipboard(text)
+        return "break"
+
+    def widget_text(self, box):
+        """文本框的真实内容，忽略输入框中的占位提示。"""
+        if box is getattr(self, "text_input", None):
+            return self.input_value()
+        return box.get("1.0", "end-1c")
+
+    def write_clipboard(self, text):
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+        except tk.TclError:
+            self.show_status("复制失败，请选中文本后手动复制。")
+            return False
+        return True
+
+    # ---- 聊天窗口 ----
+    def configure_chat_tags(self):
+        """用文本标签模拟聊天气泡：左侧是收到的，右侧是发出的。"""
+        colors = self.colors
+        box = self.chat_box
+        # 选中文字只改背景色，不画任何描边
+        box.tag_configure("sel", borderwidth=0, relief="flat")
+        box.tag_configure(
+            "placeholder",
+            foreground=colors["muted"],
+            font=self.small_font,
+            justify="left",
+            spacing1=8,
+            lmargin1=4,
+            lmargin2=4,
+        )
+        box.tag_configure(
+            "in_meta",
+            foreground=colors["muted"],
+            font=self.small_font,
+            justify="left",
+            spacing1=6,
+        )
+        box.tag_configure(
+            "out_meta",
+            foreground=colors["muted"],
+            font=self.small_font,
+            justify="right",
+            spacing1=6,
+        )
+        box.tag_configure(
+            "in",
+            background=colors["bubble_in"],
+            foreground=colors["text"],
+            font=self.body_font,
+            justify="left",
+            spacing1=4,
+            spacing3=4,
+        )
+        box.tag_configure(
+            "out",
+            background=colors["primary"],
+            foreground="#ffffff",
+            font=self.body_font,
+            justify="right",
+            spacing1=4,
+            spacing3=4,
+        )
+        box.tag_configure(
+            "in_file",
+            background=colors["bubble_in"],
+            foreground=colors["primary"],
+            font=self.body_font,
+            justify="left",
+            underline=True,
+            spacing1=4,
+            spacing3=4,
+        )
+        box.tag_configure(
+            "out_file",
+            background=colors["primary"],
+            foreground="#ffffff",
+            font=self.body_font,
+            justify="right",
+            underline=True,
+            spacing1=4,
+            spacing3=4,
+        )
+
+    def start_chat_polling(self):
+        """首次绘制聊天窗口，并开始轮询手机发来的消息。"""
+        self.sync_shared_files(force=True)
+        self.chat_version = CHAT_LOG.version()
+        self.render_chat()
+        _version, messages = CHAT_LOG.snapshot()
+        self.last_message_id = max((m["id"] for m in messages), default=0)
+        self.chat_poll_job = self.root.after(self.CHAT_POLL_MS, self.poll_chat)
+
+    def sync_shared_files(self, force=False):
+        """把共享目录中的新文件同步进聊天记录，避免频繁扫描目录。"""
+        now = time.monotonic()
+        if not force and now - self.last_shared_sync < self.SHARED_SYNC_SECONDS:
+            return
+        self.last_shared_sync = now
+        CHAT_LOG.sync_shared_files(SHARED_DIR)
+
+    def poll_chat(self):
+        """轮询聊天记录：只要最新消息，不保留历史。"""
+        self.sync_shared_files()
+        version, messages = CHAT_LOG.snapshot(since=self.last_message_id)
+        for message in messages:
+            self.last_message_id = max(self.last_message_id, message["id"])
+        if version != self.chat_version:
+            # 记录被清空或切换了共享目录，整体重绘
+            self.chat_version = version
+            self.render_chat()
+        elif messages:
+            self.append_chat_messages(messages)
+            incoming = [m for m in messages if m["sender"] == "phone"]
+            if incoming:
+                self.announce(incoming[-1])
+        self.chat_poll_job = self.root.after(self.CHAT_POLL_MS, self.poll_chat)
+
+    def announce(self, message):
+        if message["kind"] == "file":
+            self.show_status(f"收到手机发来的文件：{message['name']}")
+        else:
+            self.show_status(
+                f"收到手机发来的文本（{len(message['text'])} 字），可选中复制。"
+            )
+
+    def render_chat(self):
+        """整体重绘聊天窗口；仅在清空记录或切换共享目录后调用。"""
+        box = self.chat_box
+        _version, messages = CHAT_LOG.snapshot(sources=("chat",))
+        self.chat_file_tags.clear()
+        self.chat_message_tags.clear()
+        box.configure(state="normal")
+        box.delete("1.0", "end")
+        if messages:
+            for message in messages:
+                self.insert_chat_message(message)
+        else:
+            box.insert(
+                "end",
+                "还没有消息。\n在下方输入文字后点击「发送文本」，或点击「选择文件并发送」。",
+                ("placeholder",),
+            )
+        box.configure(state="disabled")
+        box.see("end")
+
+    def append_chat_messages(self, messages):
+        """在末尾追加新消息；只增加内容，不打断用户正在进行的选中操作。"""
+        visible = [message for message in messages if message["source"] == "chat"]
+        if not visible:
+            return
+        box = self.chat_box
+        at_bottom = box.yview()[1] >= 0.98
+        box.configure(state="normal")
+        if box.tag_ranges("placeholder"):
+            box.delete("1.0", "end")
+        for message in visible:
+            self.insert_chat_message(message)
+        box.configure(state="disabled")
+        if at_bottom:
+            box.see("end")
+
+    def insert_chat_message(self, message):
+        """把一条消息写进只读文本框；文字可以直接选中、复制。"""
+        box = self.chat_box
+        outgoing = message["sender"] == "computer"
+        side = "out" if outgoing else "in"
+        # 每条消息一个专属标签，右键时可以定位到具体是哪一条
+        tag = f"msg_{message['id']}"
+        self.chat_message_tags[tag] = message
+        stamp = time.strftime(
+            "%H:%M", time.localtime(message.get("time") or time.time())
+        )
+        who = "电脑" if outgoing else "手机"
+        box.insert("end", f"{who} · {stamp}\n", (f"{side}_meta", tag))
+        if message["kind"] == "file":
+            size = format_size(message.get("size", 0))
+            file_tag = f"file_{message['id']}"
+            # 首尾空格充当气泡内边距，让文字不贴着背景边缘
+            box.insert(
+                "end",
+                f"  [文件] {message['name']}（{size}）点击打开  \n",
+                (f"{side}_file", tag, file_tag),
+            )
+            path = message.get("path")
+            if path:
+                self.chat_file_tags[file_tag] = path
+        else:
+            box.insert("end", self.pad_bubble(message["text"]) + "\n", (side, tag))
+        box.insert("end", "\n", (tag,))
+
+    def file_path_at(self, x, y):
+        """返回指定位置的文件路径；不在文件气泡上时返回 None。"""
+        try:
+            names = self.chat_box.tag_names(self.chat_box.index(f"@{x},{y}"))
+        except tk.TclError:
+            return None
+        for name in names:
+            if name in self.chat_file_tags:
+                return self.chat_file_tags[name]
+        return None
+
+    def message_at(self, x, y):
+        """返回指定位置的消息；不在任何消息上时返回 None。"""
+        try:
+            names = self.chat_box.tag_names(self.chat_box.index(f"@{x},{y}"))
+        except tk.TclError:
+            return None
+        for name in names:
+            if name in self.chat_message_tags:
+                return self.chat_message_tags[name]
+        return None
+
+    def attach_chat_menu(self):
+        """聊天窗口专用的右键菜单：可以单独复制光标下的那一条消息。"""
+        # 每次都复用同一个菜单对象，只重建菜单项，避免反复创建 Tk 菜单
+        self.chat_menu = tk.Menu(self.chat_box, tearoff=False)
+        for sequence in ("<Button-3>", "<Button-2>", "<Control-Button-1>"):
+            self.chat_box.bind(sequence, self.popup_chat_menu)
+        self.chat_box.bind(
+            "<Control-c>", lambda _event: self.copy_widget_selection(self.chat_box)
+        )
+        self.chat_box.bind(
+            "<Command-c>", lambda _event: self.copy_widget_selection(self.chat_box)
+        )
+
+    def popup_chat_menu(self, event):
+        menu = self.chat_menu
+        menu.delete(0, "end")
+        message = self.message_at(event.x, event.y)
+        if message is not None:
+            if message["kind"] == "file":
+                menu.add_command(
+                    label="复制文件名",
+                    command=lambda item=message: self.copy_chat_message(item),
+                )
+                menu.add_command(
+                    label="复制文件路径",
+                    command=lambda item=message: self.copy_chat_message(
+                        item, path=True
+                    ),
+                )
+            else:
+                menu.add_command(
+                    label="复制这条消息",
+                    command=lambda item=message: self.copy_chat_message(item),
+                )
+            menu.add_separator()
+        if self.selected_text(self.chat_box):
+            menu.add_command(
+                label="复制选中内容",
+                command=lambda: self.copy_widget_selection(self.chat_box),
+            )
+        menu.add_command(
+            label="全选", command=lambda: self.select_all_text(self.chat_box)
+        )
+        try:
+            self.chat_box.focus_set()
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+        return "break"
+
+    def copy_chat_message(self, message, path=False):
+        """复制一整条消息，不包含时间戳和气泡里的额外空格。"""
+        if path:
+            text = message.get("path") or ""
+        elif message["kind"] == "file":
+            text = message["name"]
+        else:
+            text = message["text"]
+        if not text:
+            return
+        if self.write_clipboard(text):
+            preview = " ".join(text.split())
+            if len(preview) > 16:
+                preview = preview[:16] + "…"
+            self.show_status(f"已复制：{preview}")
+
+    def on_chat_click(self, event):
+        path = self.file_path_at(event.x, event.y)
+        if path:
+            self.open_path(path)
+            return "break"
+        return None
+
+    def on_chat_motion(self, event):
+        cursor = "hand2" if self.file_path_at(event.x, event.y) else "arrow"
+        if self.chat_box.cget("cursor") != cursor:
+            self.chat_box.configure(cursor=cursor)
+
+    def on_chat_leave(self, _event=None):
+        self.chat_box.configure(cursor="arrow")
+
+    @staticmethod
+    def pad_bubble(text):
+        """给气泡文字加上左右内边距。"""
+        return "  " + text.replace("\n", "  \n  ") + "  "
+
+    def clear_chat(self):
+        """清空当前会话的聊天记录（不影响磁盘上的文件）。"""
+        self.chat_version = CHAT_LOG.clear()
+        self.render_chat()
+        self.show_status("已清空当前会话的聊天记录，手机页面会同步清空。")
+
+    # ---- 输入框 ----
+    def show_input_placeholder(self):
+        """空输入框显示浅色提示，与网页端 placeholder 保持一致。"""
+        self.text_input.delete("1.0", "end")
+        self.text_input.insert("1.0", self.SEND_PLACEHOLDER)
+        self.text_input.tag_add("placeholder", "1.0", "end")
+        self.text_input.tag_config("placeholder", foreground=self.colors["muted"])
+        self.text_input.edit_reset()
+        self.input_placeholder = True
+
+    def on_input_focus_in(self, _event=None):
+        if self.input_placeholder:
+            self.text_input.delete("1.0", "end")
+            self.text_input.edit_reset()
+            self.input_placeholder = False
+
+    def on_input_focus_out(self, _event=None):
+        if not self.text_input.get("1.0", "end-1c").strip():
+            self.show_input_placeholder()
+
+    def input_value(self):
+        """返回输入框中的真实文本，忽略占位提示。"""
+        if self.input_placeholder:
+            return ""
+        return self.text_input.get("1.0", "end-1c")
+
+    def send_text_shortcut(self, _event=None):
+        self.send_text_to_phone()
+        return "break"
+
+    def send_text_to_phone(self):
+        text = self.input_value()
+        if not text.strip():
+            self.show_status("请先输入要发送到手机的文本。")
+            self.text_input.focus_set()
+            return
+        try:
+            CHAT_LOG.add_text("computer", text)
+        except (TypeError, ValueError) as exc:
+            self.show_status(str(exc))
+            return
+        self.clear_text_input()
+        self.show_status("文本已发送，手机页面会自动显示。")
+
+    def clear_text_input(self):
+        self.text_input.delete("1.0", "end")
+        self.text_input.edit_reset()
+        self.input_placeholder = False
+        self.text_input.focus_set()
+
+    # ---- 文件 ----
+    def send_file_to_phone(self):
+        """把本机文件放进共享目录，并在聊天窗口中显示为发出的消息。"""
+        selected = filedialog.askopenfilenames(
+            parent=self.root,
+            title="选择要发送到手机的文件",
+        )
+        if not selected:
+            return
+
+        sent = 0
+        failures = []
+        for raw in selected:
+            source = Path(raw)
+            try:
+                target = place_shared_file(source)
+                stat = target.stat()
+            except OSError as exc:
+                failures.append(f"{source.name}：{exc}")
+                continue
+            CHAT_LOG.add_file("computer", target.name, stat.st_size, target)
+            sent += 1
+
+        if failures:
+            messagebox.showerror(
+                "部分文件发送失败", "\n".join(failures), parent=self.root
+            )
+        if sent:
+            self.show_status(f"已发送 {sent} 个文件，手机页面可下载。")
+
+    def open_path(self, path):
+        try:
+            open_local_path(path)
+        except (OSError, RuntimeError) as exc:
+            messagebox.showerror("无法打开文件", str(exc), parent=self.root)
 
     def refresh_address(self):
         ip = local_ip()
@@ -994,7 +2157,8 @@ class App:
         SHARED_DIR = Path(selected).resolve()
         self.folder_path.set(str(SHARED_DIR))
         self.folder_entry.xview_moveto(1)
-        self.show_status("共享目录已切换，刷新手机页面即可查看。")
+        self.sync_shared_files(force=True)
+        self.show_status("共享目录已切换，手机页面会自动更新。")
 
     def draw_qr(self, value):
         """用 segno 生成二维码，并直接绘制到 Tk Canvas。"""
@@ -1027,12 +2191,7 @@ class App:
     def copy_url(self):
         if not self.url:
             return
-        try:
-            self.root.clipboard_clear()
-            self.root.clipboard_append(self.url)
-        except tk.TclError:
-            self.show_status("复制失败，请选中访问地址后手动复制。")
-        else:
+        if self.write_clipboard(self.url):
             self.show_status("地址已复制，可粘贴到同一局域网设备的浏览器中。")
 
     def open_folder(self):
@@ -1042,8 +2201,9 @@ class App:
             messagebox.showerror("无法打开目录", str(exc), parent=self.root)
 
     def close(self):
-        if self.feedback_job is not None:
-            self.root.after_cancel(self.feedback_job)
+        for job in (self.feedback_job, self.chat_poll_job):
+            if job is not None:
+                self.root.after_cancel(job)
         if self.server is not None:
             self.server.shutdown()
             self.server.server_close()
@@ -1056,48 +2216,138 @@ class Handler(BaseHTTPRequestHandler):
         if sys.stderr is not None:
             super().log_message(format, *args)
 
-    def reply(self, status, body, content_type="text/html; charset=utf-8"):
+    def reply(
+        self, status, body, content_type="text/html; charset=utf-8", headers=None
+    ):
         data = body.encode("utf-8") if isinstance(body, str) else body
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(data)
 
-    def do_GET(self):
-        request_path = urlsplit(self.path).path
-        if request_path == "/":
-            files = []
-            for item in sorted(SHARED_DIR.iterdir(), key=lambda p: p.name.lower()):
-                if item.is_file() and not item.name.startswith("."):
-                    name = html.escape(item.name)
-                    href = html.escape("/files/" + quote(item.name), quote=True)
-                    size = self.format_size(item.stat().st_size)
-                    files.append(
-                        f'<li><div class="file-info">'
-                        f'<a class="file-name" href="{href}">{name}</a>'
-                        f'<small class="file-size">{size}</small></div>'
-                        f'<a class="download" href="{href}" download>下载</a></li>'
-                    )
-            file_list = (
-                "<ul>" + "".join(files) + "</ul>"
-                if files
-                else '<p class="empty">共享目录为空。</p>'
+    def reply_json(self, status, payload):
+        # 聊天状态需要实时刷新，禁止浏览器或代理缓存。
+        self.reply(
+            status,
+            json.dumps(payload, ensure_ascii=False),
+            "application/json; charset=utf-8",
+            {"Cache-Control": "no-store"},
+        )
+
+    def reply_error(self, status, message):
+        """以 UTF-8 返回错误说明。
+
+        BaseHTTPRequestHandler.send_error 会把消息按 latin-1 编码，中文会直接
+        抛出 UnicodeEncodeError 并中断响应，因此这里自己构造响应体。
+        """
+        self.reply(status, message, "text/plain; charset=utf-8")
+
+    def wants_json(self):
+        return "application/json" in self.headers.get("Accept", "")
+
+    # ---- 页面 ----
+    def render_chat_page(self):
+        """聊天窗口页面：先渲染会话中的消息，之后由前端轮询增量更新。"""
+        CHAT_LOG.sync_shared_files(SHARED_DIR)
+        version, messages = CHAT_LOG.snapshot()
+        last_id = messages[-1]["id"] if messages else 0
+        # 先替换标量占位符，最后插入消息，避免消息内容意外命中占位符
+        page = PAGE_HEAD.replace("__CHAT_VERSION__", str(version))
+        page = page.replace("__LAST_ID__", str(last_id))
+        return page.replace(
+            "__MESSAGES__", "".join(message_html(message) for message in messages)
+        )
+
+    def render_files_page(self):
+        """共享目录的完整列表；聊天窗口只回填最近的一部分文件。"""
+        files = []
+        try:
+            items = sorted(SHARED_DIR.iterdir(), key=lambda path: path.name.lower())
+        except OSError:
+            items = []
+        for item in items:
+            if item.name.startswith("."):
+                continue
+            try:
+                if not item.is_file():
+                    continue
+                size = item.stat().st_size
+            except OSError:
+                continue
+            name = html.escape(item.name)
+            href = html.escape("/files/" + quote(item.name), quote=True)
+            files.append(
+                f'<li><div class="file-info">'
+                f'<a class="file-name" href="{href}">{name}</a>'
+                f'<small class="file-size">{format_size(size)}</small></div>'
+                f'<a class="download" href="{href}" download>下载</a></li>'
             )
-            self.reply(200, PAGE_HEAD.replace("{files}", file_list))
+        listing = (
+            "<ul>" + "".join(files) + "</ul>"
+            if files
+            else '<p class="empty">共享目录为空。</p>'
+        )
+        page = FILES_PAGE.replace("__COUNT__", str(len(files)))
+        return page.replace("__FILES__", listing)
+
+    # ---- GET ----
+    def do_GET(self):
+        parts = urlsplit(self.path)
+        request_path = parts.path
+        if request_path == "/chat/messages":
+            self.handle_chat_state(parts.query)
+            return
+
+        if request_path == "/":
+            self.reply(200, self.render_chat_page())
+            return
+
+        if request_path == "/files":
+            self.reply(200, self.render_files_page())
             return
 
         if not request_path.startswith("/files/"):
             self.send_error(404)
             return
 
-        # 只允许访问共享目录的直接子文件，避免 ../ 路径穿越。
-        requested_name = unquote(request_path[len("/files/") :])
+        self.serve_shared_file(request_path[len("/files/") :])
+
+    def handle_chat_state(self, query):
+        """返回聊天记录的增量内容；版本变化时返回全部内容。"""
+        params = parse_qs(query)
+        try:
+            since = int(params.get("since", ["0"])[0])
+        except ValueError:
+            since = 0
+        version = CHAT_LOG.version()
+        if params.get("version", [None])[0] != str(version):
+            # 记录被清空，或共享目录发生了变化，客户端需要整体重绘
+            since = 0
+        version, messages = CHAT_LOG.snapshot(since=since)
+        self.reply_json(
+            200,
+            {
+                "ok": True,
+                "version": version,
+                "messages": [public_message(message) for message in messages],
+            },
+        )
+
+    def serve_shared_file(self, encoded_name):
+        """只允许访问共享目录的直接子文件，避免 ../ 路径穿越。"""
+        requested_name = unquote(encoded_name)
         if not requested_name or "/" in requested_name or "\\" in requested_name:
             self.send_error(404)
             return
         target = SHARED_DIR / requested_name
-        if not target.is_file() or target.parent != SHARED_DIR:
+        try:
+            allowed = target.is_file() and target.parent == SHARED_DIR
+        except OSError:
+            allowed = False
+        if not allowed:
             self.send_error(404)
             return
 
@@ -1119,30 +2369,78 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.write(chunk)
         except (BrokenPipeError, ConnectionResetError):
             pass
+        except OSError:
+            self.send_error(404)
 
-    @staticmethod
-    def format_size(size):
-        for unit in ("B", "KB", "MB", "GB"):
-            if size < 1024 or unit == "GB":
-                return f"{size:.1f} {unit}" if unit != "B" else f"{size} B"
-            size /= 1024
-
+    # ---- POST ----
     def do_POST(self):
-        if self.path != "/":
+        request_path = urlsplit(self.path).path
+        if request_path == "/text":
+            self.handle_text_post()
+            return
+        if request_path == "/chat/clear":
+            self.handle_chat_clear()
+            return
+        if request_path != "/":
             self.send_error(404)
             return
+        self.handle_upload_post()
 
+    def handle_text_post(self):
+        """接收手机发送的文本，作为一条消息加入当前会话。"""
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
-            self.send_error(400, "Invalid Content-Length")
+            self.reply_json(400, {"ok": False, "error": "请求长度无效"})
             return
 
         if length <= 0:
-            self.send_error(400, "没有收到文件")
+            self.reply_json(400, {"ok": False, "error": "没有收到文本内容"})
+            return
+        if length > MAX_TEXT_BODY:
+            self.reply_json(413, {"ok": False, "error": "文本内容过大"})
+            return
+
+        body = self.rfile.read(length)
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            self.reply_json(400, {"ok": False, "error": "无法解析文本内容"})
+            return
+
+        text = payload.get("text", "") if isinstance(payload, dict) else ""
+        try:
+            message = CHAT_LOG.add_text("phone", text)
+        except (TypeError, ValueError) as exc:
+            self.reply_json(400, {"ok": False, "error": str(exc)})
+            return
+
+        self.reply_json(200, {"ok": True, "message": public_message(message)})
+
+    def handle_chat_clear(self):
+        """清空当前会话的聊天记录；只影响内存，不动磁盘文件。"""
+        version = CHAT_LOG.clear()
+        if self.wants_json():
+            self.reply_json(200, {"ok": True, "version": version})
+            return
+        self.send_response(303)
+        self.send_header("Location", "/")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def handle_upload_post(self):
+        """处理网页表单：既接收文件，也接收没有脚本时提交的文本。"""
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self.reply_error(400, "请求长度无效")
+            return
+
+        if length <= 0:
+            self.reply_error(400, "没有收到内容")
             return
         if length > MAX_SIZE:
-            self.send_error(413, "上传内容总大小不能超过 2 GiB")
+            self.reply_error(413, "上传内容总大小不能超过 2 GiB")
             return
 
         body = self.rfile.read(length)
@@ -1154,47 +2452,62 @@ class Handler(BaseHTTPRequestHandler):
         )
         message = BytesParser(policy=default).parsebytes(raw)
 
-        saved = []
+        created = []
+        errors = []
         for part in message.iter_parts():
             filename = part.get_filename()
-            if not filename:
+            if filename:
+                try:
+                    created.append(self.save_uploaded_file(part, filename))
+                except OSError as exc:
+                    errors.append(f"{filename}：{exc}")
                 continue
 
-            # 浏览器可能提交 Unix 或 Windows 风格的路径。
-            filename = os.path.basename(filename.replace("\\", "/"))
-            if not filename:
-                filename = "uploaded_file"
-            stem = Path(filename).stem or "uploaded_file"
-            suffix = Path(filename).suffix
-            target = SHARED_DIR / f"{stem}_{uuid.uuid4().hex[:8]}{suffix}"
-            target.write_bytes(part.get_payload(decode=True) or b"")
-            saved.append((target.name, target.stat().st_size))
+            if part.get_param("name", header="content-disposition") != "text":
+                continue
+            text = (part.get_payload(decode=True) or b"").decode("utf-8", "replace")
+            if not text.strip():
+                continue
+            try:
+                created.append(CHAT_LOG.add_text("phone", text))
+            except (TypeError, ValueError) as exc:
+                errors.append(str(exc))
 
-        if not saved:
-            self.send_error(400, "没有找到上传文件")
+        if self.wants_json():
+            if not created and errors:
+                self.reply_json(400, {"ok": False, "error": "；".join(errors)})
+                return
+            self.reply_json(
+                200,
+                {
+                    "ok": True,
+                    "messages": [public_message(item) for item in created],
+                    "errors": errors,
+                },
+            )
             return
 
-        file_items = "".join(
-            '<div class="file-summary">'
-            '<span class="file-icon" aria-hidden="true">'
-            '<svg class="icon" viewBox="0 0 24 24">'
-            '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6" />'
-            "</svg></span>"
-            '<span class="file-details">'
-            f'<span class="file-name">{html.escape(name)}</span>'
-            f'<span class="file-meta">{self.format_size(size)} · 已保存</span>'
-            "</span></div>"
-            for name, size in saved
-        )
-        summary = (
-            f"已保存 {len(saved)} 个文件到电脑的共享文件夹"
-            if len(saved) > 1
-            else "文件已安全保存到电脑的共享文件夹"
-        )
-        success_page = UPLOAD_SUCCESS_PAGE.replace("{files}", file_items).replace(
-            "{summary}", summary
-        )
-        self.reply(200, success_page)
+        if not created:
+            self.reply_error(400, "没有收到可保存的内容")
+            return
+
+        # 没有脚本时提交表单，回到聊天页面即可看到新消息
+        self.send_response(303)
+        self.send_header("Location", "/")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def save_uploaded_file(self, part, filename):
+        """保存上传的文件到共享目录，并记录一条聊天消息。"""
+        # 浏览器可能提交 Unix 或 Windows 风格的路径。
+        filename = os.path.basename(filename.replace("\\", "/"))
+        if not filename:
+            filename = "uploaded_file"
+        stem = Path(filename).stem or "uploaded_file"
+        suffix = Path(filename).suffix
+        target = SHARED_DIR / f"{stem}_{uuid.uuid4().hex[:8]}{suffix}"
+        target.write_bytes(part.get_payload(decode=True) or b"")
+        return CHAT_LOG.add_file("phone", target.name, target.stat().st_size, target)
 
 
 if __name__ == "__main__":
