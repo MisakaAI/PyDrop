@@ -1172,12 +1172,10 @@ class ChatLog:
     """会话级聊天记录。
 
     文本和文件消息都只保存在内存中：不写入磁盘、不保留历史记录，程序退出后
-    即消失。共享目录里的文件会作为电脑发出的消息出现在聊天窗口中，方便手机
-    直接下载；这类消息只回填最近修改的一部分，其余文件仍可在共享文件页面下载。
+    即消失。共享目录里的文件可在共享文件页面下载，不会自动出现在聊天窗口中。
     """
 
     MAX_MESSAGES = 400  # 防止长时间运行后内存无限增长
-    BACKFILL_LIMIT = 40  # 共享目录回填进聊天窗口的最大文件数
     SENDERS = ("phone", "computer")
 
     def __init__(self):
@@ -1185,8 +1183,6 @@ class ChatLog:
         self._messages = []
         self._next_id = 1
         self._version = 1
-        self._shared_dir = None
-        self._known_files = set()
 
     # ---- 写入（调用 _append 前必须持有锁）----
     def _append(self, message):
@@ -1221,7 +1217,6 @@ class ChatLog:
         if not name:
             raise ValueError("文件名不能为空")
         with self._lock:
-            self._known_files.add(name)
             return self._append(
                 {
                     "kind": "file",
@@ -1257,83 +1252,6 @@ class ChatLog:
             return self._version, messages
 
     # ---- 共享目录 ----
-    def sync_shared_files(self, directory):
-        """把共享目录中的文件同步成电脑发出的消息，返回新增数量。"""
-        directory = Path(directory)
-        entries = self._scan_shared_dir(directory)
-        if entries is None:
-            return 0
-
-        with self._lock:
-            first_scan = self._shared_dir != directory
-            if first_scan:
-                self._shared_dir = directory
-                self._known_files = set()
-                self._messages = [
-                    message
-                    for message in self._messages
-                    if message["source"] != "shared"
-                ]
-                self._version += 1
-
-            existing = {name for name, _size, _time, _path in entries}
-            self._known_files &= existing
-            # 文件被移出共享目录后，对应的气泡也一起消失
-            self._messages = [
-                message
-                for message in self._messages
-                if message["source"] != "shared" or message.get("name") in existing
-            ]
-
-            if first_scan and len(entries) > self.BACKFILL_LIMIT:
-                backfill_from = len(entries) - self.BACKFILL_LIMIT
-            else:
-                backfill_from = 0
-
-            added = 0
-            for index, (name, size, _time, path) in enumerate(entries):
-                if name in self._known_files:
-                    continue
-                # 已记录过的文件名不再重复回填，避免每次扫描都产生新气泡
-                self._known_files.add(name)
-                if index < backfill_from:
-                    # 首次扫描只回填最近修改的一部分，其余文件仍可在共享文件页面下载
-                    continue
-                self._append(
-                    {
-                        "kind": "file",
-                        "sender": "computer",
-                        "source": "shared",
-                        "name": name,
-                        "size": size,
-                        "path": str(path),
-                    }
-                )
-                added += 1
-            return added
-
-    @staticmethod
-    def _scan_shared_dir(directory):
-        """按修改时间从早到晚列出共享目录中的文件。"""
-        entries = []
-        try:
-            with os.scandir(directory) as scanner:
-                for entry in scanner:
-                    if entry.name.startswith("."):
-                        continue
-                    try:
-                        if not entry.is_file():
-                            continue
-                        stat = entry.stat()
-                    except OSError:
-                        continue
-                    entries.append(
-                        (entry.name, stat.st_size, stat.st_mtime, Path(entry.path))
-                    )
-        except OSError:
-            return None
-        entries.sort(key=lambda item: item[2])
-        return entries
 
 
 CHAT_LOG = ChatLog()
@@ -1360,7 +1278,6 @@ class App:
     QR_SIZE = 256
     SEND_PLACEHOLDER = "输入要发送到对方设备的文本，Ctrl+Enter 发送"
     CHAT_POLL_MS = 700
-    SHARED_SYNC_SECONDS = 5.0
 
     def __init__(self):
         self.server = None
@@ -1369,7 +1286,6 @@ class App:
         self.chat_poll_job = None
         self.chat_version = 1
         self.last_message_id = 0
-        self.last_shared_sync = 0.0
         self.root = tk.Tk()
         self.root.title("PyDrop - 局域网文件互传")
         self.root.configure(bg="#f3f6fa")
@@ -1441,11 +1357,10 @@ class App:
         content = tk.Frame(self.root, bg=colors["background"], padx=24, pady=24)
         content.pack(fill="both", expand=True)
         content.columnconfigure(1, weight=1)
-        content.columnconfigure(2, weight=1)
         content.rowconfigure(1, weight=1)
 
         header = tk.Frame(content, bg=colors["background"])
-        header.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 20))
+        header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 20))
         header.columnconfigure(0, weight=1)
 
         tk.Label(
@@ -1468,17 +1383,22 @@ class App:
             bg=colors["background"],
             fg=colors["muted"],
             font=self.body_font,
-        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
+
+        left_panel = tk.Frame(content, bg=colors["background"])
+        left_panel.grid(row=1, column=0, sticky="nsew", padx=(0, 20))
+        left_panel.columnconfigure(0, weight=1)
+        left_panel.rowconfigure(1, weight=1)
 
         qr_card = tk.Frame(
-            content,
+            left_panel,
             bg=colors["card"],
             highlightbackground=colors["border"],
             highlightthickness=1,
             padx=16,
-            pady=16,
+            pady=10,
         )
-        qr_card.grid(row=1, column=0, sticky="ns", padx=(0, 20))
+        qr_card.grid(row=0, column=0, sticky="ew", pady=(0, 14))
 
         tk.Label(
             qr_card,
@@ -1495,7 +1415,7 @@ class App:
             bg="white",
             highlightthickness=0,
         )
-        self.qr_canvas.pack(expand=True, pady=8)
+        self.qr_canvas.pack(expand=True, pady=2)
         tk.Label(
             qr_card,
             text="使用其他设备的相机扫描\n在浏览器中互传文件与文本",
@@ -1505,21 +1425,22 @@ class App:
             justify="center",
         ).pack()
 
-        details = tk.Frame(content, bg=colors["background"])
-        details.grid(row=1, column=1, sticky="nsew")
-        details.columnconfigure(0, weight=1)
+        details = tk.Frame(left_panel, bg=colors["background"])
+        details.grid(row=1, column=0, sticky="nsew")
+        details.columnconfigure(0, weight=0)
+        details.columnconfigure(1, weight=1)
 
         tk.Label(
             details,
-            text="浏览器访问地址",
+            text="浏览器访问",
             bg=colors["background"],
             fg=colors["text"],
             font=heading_font,
-        ).grid(row=0, column=0, sticky="w", pady=(2, 10))
+        ).grid(row=0, column=0, sticky="w", padx=(0, 8), pady=(2, 0))
         self.address_entry = self.readonly_entry(details, self.address)
-        self.address_entry.grid(row=1, column=0, sticky="ew", ipady=8)
+        self.address_entry.grid(row=0, column=1, sticky="ew", ipady=6)
         address_actions = tk.Frame(details, bg=colors["background"])
-        address_actions.grid(row=2, column=0, sticky="w", pady=(10, 24))
+        address_actions.grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 16))
         self.copy_button = self.action_button(
             address_actions, "复制地址", self.copy_url, primary=True
         )
@@ -1529,7 +1450,7 @@ class App:
         )
 
         tk.Frame(details, bg=colors["border"], height=1).grid(
-            row=3, column=0, sticky="ew", pady=(0, 20)
+            row=2, column=0, columnspan=2, sticky="ew", pady=(0, 14)
         )
         tk.Label(
             details,
@@ -1537,9 +1458,9 @@ class App:
             bg=colors["background"],
             fg=colors["text"],
             font=heading_font,
-        ).grid(row=4, column=0, sticky="w", pady=(0, 10))
+        ).grid(row=3, column=0, sticky="w", padx=(0, 8))
         self.folder_entry = self.readonly_entry(details, self.folder_path)
-        self.folder_entry.grid(row=5, column=0, sticky="ew", ipady=8)
+        self.folder_entry.grid(row=3, column=1, sticky="ew", ipady=6)
         self.folder_entry.xview_moveto(1)
         tk.Label(
             details,
@@ -1549,9 +1470,9 @@ class App:
             font=self.small_font,
             wraplength=280,
             justify="left",
-        ).grid(row=6, column=0, sticky="w", pady=(8, 12))
+        ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(6, 8))
         folder_actions = tk.Frame(details, bg=colors["background"])
-        folder_actions.grid(row=7, column=0, sticky="w")
+        folder_actions.grid(row=5, column=0, columnspan=2, sticky="w")
         self.action_button(folder_actions, "打开文件夹", self.open_folder).pack(
             side="left", padx=(0, 8)
         )
@@ -1564,10 +1485,11 @@ class App:
             bg=colors["card"],
             highlightbackground=colors["border"],
             highlightthickness=1,
+            highlightcolor=colors["border"],
             padx=16,
             pady=16,
         )
-        chat_card.grid(row=1, column=2, sticky="nsew", padx=(20, 0))
+        chat_card.grid(row=1, column=1, sticky="nsew")
         chat_card.columnconfigure(0, weight=1)
         chat_card.rowconfigure(2, weight=1)
 
@@ -1598,8 +1520,7 @@ class App:
         chat_area = tk.Frame(
             chat_card,
             bg=colors["chat"],
-            highlightthickness=1,
-            highlightbackground=colors["border"],
+            highlightthickness=0,
         )
         chat_area.grid(row=2, column=0, sticky="nsew")
         chat_area.columnconfigure(0, weight=1)
@@ -1676,7 +1597,7 @@ class App:
             fg=colors["muted"],
             font=self.small_font,
             anchor="w",
-        ).grid(row=2, column=0, columnspan=3, sticky="ew", pady=(18, 0))
+        ).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(18, 0))
 
     def readonly_entry(self, parent, variable):
         """允许选择、复制和水平滚动，避免长地址或路径撑大窗口。"""
@@ -1884,29 +1805,19 @@ class App:
 
     def start_chat_polling(self):
         """首次绘制聊天窗口，并开始轮询对方设备发来的消息。"""
-        self.sync_shared_files(force=True)
         self.chat_version = CHAT_LOG.version()
         self.render_chat()
         _version, messages = CHAT_LOG.snapshot()
         self.last_message_id = max((m["id"] for m in messages), default=0)
         self.chat_poll_job = self.root.after(self.CHAT_POLL_MS, self.poll_chat)
 
-    def sync_shared_files(self, force=False):
-        """把共享目录中的新文件同步进聊天记录，避免频繁扫描目录。"""
-        now = time.monotonic()
-        if not force and now - self.last_shared_sync < self.SHARED_SYNC_SECONDS:
-            return
-        self.last_shared_sync = now
-        CHAT_LOG.sync_shared_files(SHARED_DIR)
-
     def poll_chat(self):
         """轮询聊天记录：只要最新消息，不保留历史。"""
-        self.sync_shared_files()
         version, messages = CHAT_LOG.snapshot(since=self.last_message_id)
         for message in messages:
             self.last_message_id = max(self.last_message_id, message["id"])
         if version != self.chat_version:
-            # 记录被清空或切换了共享目录，整体重绘
+            # 记录被清空，整体重绘
             self.chat_version = version
             self.render_chat()
         elif messages:
@@ -2245,7 +2156,6 @@ class App:
         SHARED_DIR = Path(selected).resolve()
         self.folder_path.set(str(SHARED_DIR))
         self.folder_entry.xview_moveto(1)
-        self.sync_shared_files(force=True)
         self.show_status("共享目录已切换，网页端会自动更新。")
 
     def draw_qr(self, value):
@@ -2342,7 +2252,6 @@ class Handler(BaseHTTPRequestHandler):
     # ---- 页面 ----
     def render_chat_page(self):
         """聊天窗口页面：先渲染会话中的消息，之后由前端轮询增量更新。"""
-        CHAT_LOG.sync_shared_files(SHARED_DIR)
         version, messages = CHAT_LOG.snapshot()
         last_id = messages[-1]["id"] if messages else 0
         # 先替换标量占位符，最后插入消息，避免消息内容意外命中占位符
