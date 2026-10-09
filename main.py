@@ -39,7 +39,8 @@ PAGE_HEAD = """<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#f3f7fa">
+  <meta name="theme-color" content="#f3f7fa" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0d1b25" media="(prefers-color-scheme: dark)">
   <title>PyDrop - 局域网互传</title>
   <style>
     :root {
@@ -51,6 +52,35 @@ PAGE_HEAD = """<!doctype html>
       --border: #e1eaf0;
       --page: #f3f7fa;
       --chat: #edf3f7;
+      --surface: #ffffff;
+      --surface-alt: #f7fafc;
+      --surface-tinted: #eff7f9;
+      --surface-tinted-hover: #deeff3;
+      --surface-tinted-active: #d1e7ec;
+      --surface-hover: #f7fbfc;
+      --surface-highlight: #e4f2f5;
+      --progress-track: #e6eef1;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --text: #d6e8f2;
+        --muted: #7898a8;
+        --accent: #0ea4b2;
+        --accent-dark: #0c8a98;
+        --border: #1b3246;
+        --page: #0d1b25;
+        --chat: #09141e;
+        --surface: #112233;
+        --surface-alt: #0c1c29;
+        --surface-tinted: #0e2236;
+        --surface-tinted-hover: #0d2840;
+        --surface-tinted-active: #0b2034;
+        --surface-hover: #142535;
+        --surface-highlight: #0c2332;
+        --progress-track: #192e40;
+      }
     }
 
     * { box-sizing: border-box; }
@@ -103,7 +133,7 @@ PAGE_HEAD = """<!doctype html>
       flex-shrink: 0;
       padding: 11px 14px;
       padding-top: calc(11px + env(safe-area-inset-top, 0));
-      background: #fff;
+      background: var(--surface);
       border-bottom: 1px solid var(--border);
     }
 
@@ -145,9 +175,9 @@ PAGE_HEAD = """<!doctype html>
       gap: 6px;
       min-height: 34px;
       padding: 6px 12px;
-      border: 1px solid #d4e7eb;
+      border: 1px solid var(--border);
       border-radius: 999px;
-      background: #eff7f9;
+      background: var(--surface-tinted);
       color: var(--accent-dark);
       font-size: 12.5px;
       font-weight: 650;
@@ -220,7 +250,7 @@ PAGE_HEAD = """<!doctype html>
     }
 
     .message.in .bubble {
-      background: #fff;
+      background: var(--surface);
       border: 1px solid var(--border);
       border-top-left-radius: 5px;
       box-shadow: 0 2px 10px #25465b0a;
@@ -237,7 +267,7 @@ PAGE_HEAD = """<!doctype html>
       padding: 2px 9px;
       border: 1px solid var(--border);
       border-radius: 999px;
-      background: #fff;
+      background: var(--surface);
       color: var(--muted);
       font-size: 11px;
       line-height: 1.6;
@@ -257,7 +287,7 @@ PAGE_HEAD = """<!doctype html>
     }
 
     .message.in .file-card {
-      background: #fff;
+      background: var(--surface);
       border: 1px solid var(--border);
       border-top-left-radius: 5px;
       box-shadow: 0 2px 10px #25465b0a;
@@ -278,7 +308,7 @@ PAGE_HEAD = """<!doctype html>
       border-radius: 11px;
     }
 
-    .message.in .file-icon { background: #e4f2f5; color: var(--accent); }
+    .message.in .file-icon { background: var(--surface-highlight); color: var(--accent); }
     .message.out .file-icon { background: #ffffff2e; color: #fff; }
 
     .file-info { min-width: 0; }
@@ -291,7 +321,7 @@ PAGE_HEAD = """<!doctype html>
 
     .composer-wrap {
       flex-shrink: 0;
-      background: #fff;
+      background: var(--surface);
       border-top: 1px solid var(--border);
       padding-bottom: env(safe-area-inset-bottom, 0);
     }
@@ -306,7 +336,7 @@ PAGE_HEAD = """<!doctype html>
     .composer-status:not(:empty) { padding-top: 8px; }
     .composer-status.is-error { color: #b3261e; }
 
-    .progress { height: 3px; background: #e6eef1; overflow: hidden; }
+    .progress { height: 3px; background: var(--progress-track); overflow: hidden; }
     .progress[hidden] { display: none; }
 
     .progress-bar {
@@ -327,16 +357,22 @@ PAGE_HEAD = """<!doctype html>
       padding: 11px 13px;
       border: 1px solid var(--border);
       border-radius: 15px;
-      background: #f7fafc;
+      background: var(--surface-alt);
       color: var(--text);
       font: inherit;
       font-size: 14.5px;
       line-height: 1.5;
       resize: none;
+      overflow-y: hidden;
+      scrollbar-width: none;
     }
 
-    .composer textarea::placeholder { color: #9aabb7; }
-    .composer textarea:focus { outline: none; border-color: #9fd4dc; background: #fff; }
+    .composer textarea::-webkit-scrollbar {
+      display: none;
+    }
+
+    .composer textarea::placeholder { color: var(--muted); }
+    .composer textarea:focus { outline: none; border-color: #9fd4dc; background: var(--surface); }
 
     .composer-button {
       display: inline-flex;
@@ -364,9 +400,9 @@ PAGE_HEAD = """<!doctype html>
       width: 44px;
       height: 44px;
       flex-shrink: 0;
-      border: 1px solid #d4e7eb;
+      border: 1px solid var(--border);
       border-radius: 15px;
-      background: #eff7f9;
+      background: var(--surface-tinted);
       color: var(--accent-dark);
       touch-action: manipulation;
     }
@@ -381,17 +417,17 @@ PAGE_HEAD = """<!doctype html>
     }
 
     @media (hover: hover) {
-      .chip:hover { background: #deeff3; }
+      .chip:hover { background: var(--surface-tinted-hover); }
       .composer-button:hover { background: var(--accent-dark); }
-      .icon-button:hover { background: #deeff3; }
-      .copy-button:hover { background: #eff7f9; color: var(--accent-dark); }
-      .message.in .file-card:hover { background: #f7fbfc; }
+      .icon-button:hover { background: var(--surface-tinted-hover); }
+      .copy-button:hover { background: var(--surface-tinted); color: var(--accent-dark); }
+      .message.in .file-card:hover { background: var(--surface-hover); }
       .message.out .file-card:hover { background: var(--accent-dark); }
     }
 
-    .chip:active { background: #d1e7ec; }
+    .chip:active { background: var(--surface-tinted-active); }
     .composer-button:active { background: #044f58; }
-    .icon-button:active { background: #d1e7ec; }
+    .icon-button:active { background: var(--surface-tinted-active); }
 
     @media (max-width: 480px) {
       /* 16px 可避免 iOS Safari 聚焦输入框时自动放大页面 */
@@ -471,6 +507,21 @@ PAGE_HEAD = """<!doctype html>
     let chatVersion = Number("__CHAT_VERSION__") || 1;
     const renderedIds = new Set();
     let statusTimer = null;
+    let pollFailCount = 0;
+    let offlineWarning = false;
+
+    function updateOfflineState(isOffline) {
+      if (isOffline === offlineWarning) return;
+      offlineWarning = isOffline;
+      if (isOffline) {
+        window.clearTimeout(statusTimer);
+        statusEl.textContent = "与电脑的连接已断开，正在重试…";
+        statusEl.classList.add("is-error");
+      } else {
+        statusEl.textContent = "";
+        statusEl.classList.remove("is-error");
+      }
+    }
 
     function setStatus(message, isError = false) {
       window.clearTimeout(statusTimer);
@@ -516,7 +567,7 @@ PAGE_HEAD = """<!doctype html>
       const meta = document.createElement("p");
       meta.className = "message-meta";
       const who = document.createElement("span");
-      who.textContent = `${outgoing ? "本机" : "电脑"} · ${clockText(message.time)}`;
+      who.textContent = `${outgoing ? "本机" : "对方设备"} · ${clockText(message.time)}`;
       meta.append(who);
 
       if (message.kind === "file") {
@@ -738,7 +789,13 @@ PAGE_HEAD = """<!doctype html>
           `/chat/messages?since=${lastId}&version=${chatVersion}`,
           { cache: "no-store" }
         );
-        if (!response.ok) return;
+        if (!response.ok) {
+          pollFailCount++;
+          if (pollFailCount >= 3) updateOfflineState(true);
+          return;
+        }
+        pollFailCount = 0;
+        updateOfflineState(false);
         const result = await response.json();
         const version = Number(result.version);
         if (Number.isFinite(version) && version !== chatVersion) {
@@ -750,6 +807,8 @@ PAGE_HEAD = """<!doctype html>
         scrollToEnd();
       } catch (error) {
         // 网络短暂中断时保持界面不变，下一轮会自动重试
+        pollFailCount++;
+        if (pollFailCount >= 3) updateOfflineState(true);
       }
     }
 
@@ -772,7 +831,8 @@ FILES_PAGE = """<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f3f7fa">
+  <meta name="theme-color" content="#f3f7fa" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0d1b25" media="(prefers-color-scheme: dark)">
   <title>共享文件 - PyDrop</title>
   <style>
     :root {
@@ -782,6 +842,32 @@ FILES_PAGE = """<!doctype html>
       --accent: #087e8b;
       --accent-dark: #05626d;
       --border: #e1eaf0;
+      --surface: #ffffff;
+      --surface-alt: #f8fafc;
+      --surface-tinted: #eff7f9;
+      --surface-tinted-hover: #deeff3;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --text: #d6e8f2;
+        --muted: #7898a8;
+        --accent: #0ea4b2;
+        --accent-dark: #0c8a98;
+        --border: #1b3246;
+        --surface: #112233;
+        --surface-alt: #0c1c29;
+        --surface-tinted: #0e2236;
+        --surface-tinted-hover: #0d2840;
+      }
+
+      body {
+        background:
+          radial-gradient(ellipse at 0% 0%, #0d2535 0, transparent 55%),
+          radial-gradient(ellipse at 100% 30%, #0d1e35 0, transparent 50%),
+          #0d1b25;
+      }
     }
 
     * { box-sizing: border-box; }
@@ -832,9 +918,9 @@ FILES_PAGE = """<!doctype html>
       min-height: 36px;
       margin: 18px 0;
       padding: 6px 14px;
-      border: 1px solid #d4e7eb;
+      border: 1px solid var(--border);
       border-radius: 999px;
-      background: #eff7f9;
+      background: var(--surface-tinted);
       color: var(--accent-dark);
       font-size: 13px;
       font-weight: 650;
@@ -843,7 +929,7 @@ FILES_PAGE = """<!doctype html>
 
     .card {
       padding: 22px;
-      background: #fff;
+      background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 22px;
       box-shadow: 0 8px 30px #25465b06;
@@ -858,7 +944,7 @@ FILES_PAGE = """<!doctype html>
       height: 36px;
       flex-shrink: 0;
       border-radius: 11px;
-      background: #edf6f8;
+      background: var(--surface-tinted);
       color: var(--accent);
       font-size: 13px;
       font-weight: 700;
@@ -875,7 +961,7 @@ FILES_PAGE = """<!doctype html>
       align-items: center;
       gap: 16px;
       padding: 16px 0;
-      border-top: 1px solid #edf1f4;
+      border-top: 1px solid var(--border);
     }
 
     li:first-child { border-top: 0; padding-top: 0; }
@@ -906,9 +992,9 @@ FILES_PAGE = """<!doctype html>
       min-width: 72px;
       min-height: 40px;
       padding: 8px 16px;
-      border: 1px solid #d4e7eb;
+      border: 1px solid var(--border);
       border-radius: 11px;
-      background: #eff7f9;
+      background: var(--surface-tinted);
       color: var(--accent-dark);
       font-size: 14px;
       font-weight: 600;
@@ -921,15 +1007,15 @@ FILES_PAGE = """<!doctype html>
       padding: 32px 16px;
       border: 1px dashed var(--border);
       border-radius: 14px;
-      background: #f8fafc;
+      background: var(--surface-alt);
       color: var(--muted);
       font-size: 14px;
       text-align: center;
     }
 
     @media (hover: hover) {
-      .back:hover { background: #deeff3; }
-      .download:hover { background: #deeff3; }
+      .back:hover { background: var(--surface-tinted-hover); }
+      .download:hover { background: var(--surface-tinted-hover); }
       .file-name:hover { color: var(--accent); text-decoration: underline; }
     }
 
@@ -1272,7 +1358,7 @@ class FileTransferServer(ThreadingHTTPServer):
 
 class App:
     QR_SIZE = 256
-    SEND_PLACEHOLDER = "输入要发送到手机的文本，Ctrl+Enter 发送"
+    SEND_PLACEHOLDER = "输入要发送到对方设备的文本，Ctrl+Enter 发送"
     CHAT_POLL_MS = 700
     SHARED_SYNC_SECONDS = 5.0
 
@@ -1378,7 +1464,7 @@ class App:
         self.connection_label.grid(row=0, column=1, sticky="e")
         tk.Label(
             header,
-            text="局域网文件互传 · 手机与电脑连接同一 Wi-Fi 即可使用",
+            text="局域网文件互传 · 与同一 Wi-Fi 内的其他设备互传",
             bg=colors["background"],
             fg=colors["muted"],
             font=self.body_font,
@@ -1412,7 +1498,7 @@ class App:
         self.qr_canvas.pack(expand=True, pady=8)
         tk.Label(
             qr_card,
-            text="使用手机相机扫描\n在浏览器中互传文件与文本",
+            text="使用其他设备的相机扫描\n在浏览器中互传文件与文本",
             bg=colors["card"],
             fg=colors["muted"],
             font=self.small_font,
@@ -1457,7 +1543,7 @@ class App:
         self.folder_entry.xview_moveto(1)
         tk.Label(
             details,
-            text="放入文件即可共享，手机上传也会保存到此处。",
+            text="放入文件即可共享，其他设备上传也会保存到此处。",
             bg=colors["background"],
             fg=colors["muted"],
             font=self.small_font,
@@ -1532,6 +1618,8 @@ class App:
             relief="flat",
             borderwidth=0,
             highlightthickness=0,
+            highlightbackground=colors["chat"],
+            highlightcolor=colors["chat"],
             selectborderwidth=0,
             selectbackground="#bfdbfe",
             selectforeground=colors["text"],
@@ -1795,7 +1883,7 @@ class App:
         )
 
     def start_chat_polling(self):
-        """首次绘制聊天窗口，并开始轮询手机发来的消息。"""
+        """首次绘制聊天窗口，并开始轮询对方设备发来的消息。"""
         self.sync_shared_files(force=True)
         self.chat_version = CHAT_LOG.version()
         self.render_chat()
@@ -1830,10 +1918,10 @@ class App:
 
     def announce(self, message):
         if message["kind"] == "file":
-            self.show_status(f"收到手机发来的文件：{message['name']}")
+            self.show_status(f"收到对方设备发来的文件：{message['name']}")
         else:
             self.show_status(
-                f"收到手机发来的文本（{len(message['text'])} 字），可选中复制。"
+                f"收到对方设备发来的文本（{len(message['text'])} 字），可选中复制。"
             )
 
     def render_chat(self):
@@ -1883,7 +1971,7 @@ class App:
         stamp = time.strftime(
             "%H:%M", time.localtime(message.get("time") or time.time())
         )
-        who = "电脑" if outgoing else "手机"
+        who = "电脑" if outgoing else "设备"
         box.insert("end", f"{who} · {stamp}\n", (f"{side}_meta", tag))
         if message["kind"] == "file":
             size = format_size(message.get("size", 0))
@@ -2013,7 +2101,7 @@ class App:
         """清空当前会话的聊天记录（不影响磁盘上的文件）。"""
         self.chat_version = CHAT_LOG.clear()
         self.render_chat()
-        self.show_status("已清空当前会话的聊天记录，手机页面会同步清空。")
+        self.show_status("已清空当前会话的聊天记录，网页端会同步清空。")
 
     # ---- 输入框 ----
     def show_input_placeholder(self):
@@ -2048,7 +2136,7 @@ class App:
     def send_text_to_phone(self):
         text = self.input_value()
         if not text.strip():
-            self.show_status("请先输入要发送到手机的文本。")
+            self.show_status("请先输入要发送到对方设备的文本。")
             self.text_input.focus_set()
             return
         try:
@@ -2057,7 +2145,7 @@ class App:
             self.show_status(str(exc))
             return
         self.clear_text_input()
-        self.show_status("文本已发送，手机页面会自动显示。")
+        self.show_status("文本已发送，网页端会自动显示。")
 
     def clear_text_input(self):
         self.text_input.delete("1.0", "end")
@@ -2070,7 +2158,7 @@ class App:
         """把本机文件放进共享目录，并在聊天窗口中显示为发出的消息。"""
         selected = filedialog.askopenfilenames(
             parent=self.root,
-            title="选择要发送到手机的文件",
+            title="选择要发送到对方设备的文件",
         )
         if not selected:
             return
@@ -2093,7 +2181,7 @@ class App:
                 "部分文件发送失败", "\n".join(failures), parent=self.root
             )
         if sent:
-            self.show_status(f"已发送 {sent} 个文件，手机页面可下载。")
+            self.show_status(f"已发送 {sent} 个文件，网页端可下载。")
 
     def open_path(self, path):
         try:
@@ -2133,7 +2221,7 @@ class App:
         self.status.set(
             message
             or (
-                "手机与电脑需在同一局域网；请仅在可信任的网络中共享。"
+                "各设备需在同一局域网；请仅在可信任的网络中共享。"
                 if self.url
                 else "未获取到访问地址，请检查网络连接后重新检测。"
             )
@@ -2158,7 +2246,7 @@ class App:
         self.folder_path.set(str(SHARED_DIR))
         self.folder_entry.xview_moveto(1)
         self.sync_shared_files(force=True)
-        self.show_status("共享目录已切换，手机页面会自动更新。")
+        self.show_status("共享目录已切换，网页端会自动更新。")
 
     def draw_qr(self, value):
         """用 segno 生成二维码，并直接绘制到 Tk Canvas。"""
@@ -2223,6 +2311,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "SAMEORIGIN")
+        self.send_header("Referrer-Policy", "same-origin")
         for name, value in (headers or {}).items():
             self.send_header(name, value)
         self.end_headers()
@@ -2501,10 +2592,16 @@ class Handler(BaseHTTPRequestHandler):
         """保存上传的文件到共享目录，并记录一条聊天消息。"""
         # 浏览器可能提交 Unix 或 Windows 风格的路径。
         filename = os.path.basename(filename.replace("\\", "/"))
+        # 移除空字节、控制字符，以及前后的点和空格。
+        filename = "".join(c for c in filename if ord(c) >= 0x20 and c != "\x7f")
+        filename = filename.strip(". ")
         if not filename:
             filename = "uploaded_file"
         stem = Path(filename).stem or "uploaded_file"
         suffix = Path(filename).suffix
+        # 限制 stem 长度，防止超出文件系统的 255 字节限制。
+        if len(stem.encode("utf-8")) > 180:
+            stem = stem.encode("utf-8")[:180].decode("utf-8", "ignore")
         target = SHARED_DIR / f"{stem}_{uuid.uuid4().hex[:8]}{suffix}"
         target.write_bytes(part.get_payload(decode=True) or b"")
         return CHAT_LOG.add_file("phone", target.name, target.stat().st_size, target)
