@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import html
+import io
 import json
 import mimetypes
 import os
@@ -12,6 +13,7 @@ import threading
 import time
 import tkinter as tk
 import uuid
+from email.errors import MessageError
 from email.parser import BytesParser
 from email.policy import default
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -32,6 +34,9 @@ SHARED_DIR.mkdir(parents=True, exist_ok=True)
 MAX_SIZE = 2 * 1024 * 1024 * 1024  # 2 GiB
 MAX_TEXT_LENGTH = 50_000  # 单条文本的最大字符数
 MAX_TEXT_BODY = 256 * 1024  # 文本请求体的最大字节数
+MAX_ENCODED_PART = 64 * 1024 * 1024  # 需要解码的分段只能在内存中处理的上限
+OUTBOX_ITEM_LIMIT = 256 * 1024 * 1024  # 电脑发送的单个文件超过此大小就不再读进内存
+OUTBOX_TOTAL_LIMIT = 1024 * 1024 * 1024  # 电脑发送的文件内存副本总量上限
 
 PAGE_HEAD = """<!doctype html>
 <html lang="zh-CN">
@@ -743,6 +748,11 @@ PAGE_HEAD = """<!doctype html>
         }
         (result.messages || []).forEach(appendMessage);
         scrollToEnd(true);
+        const failed = result.errors || [];
+        if (failed.length) {
+          setStatus(`${failed.length} 个文件未能保存：${failed[0]}`, true);
+          return;
+        }
         setStatus(`已发送 ${files.length} 个文件到电脑。`);
       });
       request.addEventListener("error", () => {
@@ -1113,59 +1123,117 @@ def open_shared_dir():
     open_local_path(SHARED_DIR)
 
 
-def place_shared_file(source):
-    """把本机文件放进共享目录，返回共享目录中的目标路径。
+def file_url(message):
+    """文件消息的下载地址。
 
-    同名且大小相同的文件视为同一个文件，不会重复复制；同名但内容长度不同
-    时另存为带随机后缀的文件名，避免覆盖共享目录中的已有文件。
+    电脑发出的文件走内存副本 /outbox/<token>，与共享目录无关；对方设备上传
+    的文件保存在共享目录里，走 /files/<文件名>。
     """
-    source = Path(source)
-    target = SHARED_DIR / source.name
-    if target.exists():
-        try:
-            if source.resolve() == target.resolve():
-                return target
-            if target.stat().st_size == source.stat().st_size:
-                return target
-        except OSError:
-            pass
-        target = SHARED_DIR / f"{source.stem}_{uuid.uuid4().hex[:8]}{source.suffix}"
-    shutil.copy2(source, target)
-    return target
+    token = message.get("token")
+    if token:
+        return "/outbox/" + quote(token, safe="")
+    return "/files/" + quote(message["name"])
 
 
 def message_html(message):
     """把一条聊天记录渲染成网页中的气泡（网页端就是手机端）。"""
-    outgoing = message["sender"] == "phone"
+    payload = public_message(message)
+    outgoing = payload["sender"] == "phone"
     side = "out" if outgoing else "in"
-    clock = time.strftime("%H:%M", time.localtime(message.get("time") or time.time()))
+    clock = time.strftime("%H:%M", time.localtime(payload.get("time") or time.time()))
     who = "本机" if outgoing else "电脑"
     meta = f"<span>{who} · {clock}</span>"
-    if message["kind"] == "file":
-        href = html.escape("/files/" + quote(message["name"]), quote=True)
+    if payload["kind"] == "file":
+        href = html.escape(payload["url"], quote=True)
         body = (
             f'<a class="file-card" href="{href}" download>'
             f"{FILE_ICON_HTML}"
             '<span class="file-info">'
-            f'<span class="file-name">{html.escape(message["name"])}</span>'
-            f'<span class="file-size">{format_size(message["size"])} · 点击下载</span>'
+            f'<span class="file-name">{html.escape(payload["name"])}</span>'
+            f'<span class="file-size">{format_size(payload["size"])} · 点击下载</span>'
             "</span></a>"
         )
     else:
         meta += '<button type="button" class="copy-button">复制</button>'
-        body = f'<div class="bubble">{html.escape(message["text"])}</div>'
+        body = f'<div class="bubble">{html.escape(payload["text"])}</div>'
     return (
-        f'<li class="message {side}" data-id="{message["id"]}">'
+        f'<li class="message {side}" data-id="{payload["id"]}">'
         f'<p class="message-meta">{meta}</p>{body}</li>'
     )
 
 
 def public_message(message):
-    """网页接口返回的消息结构，去掉本机文件路径。"""
-    payload = {key: value for key, value in message.items() if key != "path"}
+    """网页接口返回的消息结构，去掉本机文件路径和内部的临时副本编号。"""
+    payload = {
+        key: value for key, value in message.items() if key not in ("path", "token")
+    }
     if message["kind"] == "file":
-        payload["url"] = "/files/" + quote(message["name"])
+        payload["url"] = file_url(message)
     return payload
+
+
+class Outbox:
+    """电脑发给手机的文件：临时副本不写入共享目录。
+
+    消息里的下载地址是 /outbox/<token>，与共享目录无关，所以切换共享目录
+    不会让已经发出的文件失效。小文件读成内存副本，大文件在下载时按登记时
+    的原路径分块读取；消息被清空、挤出上限或程序退出时，内存副本随之释放。
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._items = {}
+        self._memory = 0
+
+    def add(self, name, source):
+        """登记一个待发送的文件，返回 (token, 字节数)。"""
+        source = Path(source)
+        size = source.stat().st_size
+        data = self._read_into_memory(source, size)
+        if data is not None:
+            size = len(data)
+        token = uuid.uuid4().hex
+        with self._lock:
+            if data is not None and self._memory + len(data) > OUTBOX_TOTAL_LIMIT:
+                # 一次发送多个文件时可能刚好超出总量上限，退回按原路径读取
+                data = None
+            self._items[token] = {
+                "name": name,
+                "size": size,
+                "path": source,
+                "data": data,
+            }
+            if data is not None:
+                self._memory += len(data)
+        return token, size
+
+    def get(self, token):
+        """按 token 取出文件信息；token 无效时返回 None。"""
+        with self._lock:
+            item = self._items.get(token)
+            return dict(item) if item is not None else None
+
+    def discard(self, token):
+        """释放一个文件的内存副本。"""
+        with self._lock:
+            item = self._items.pop(token, None)
+            if item is not None and item["data"] is not None:
+                self._memory -= len(item["data"])
+
+    def discard_message(self, message):
+        """ChatLog 丢弃消息时的回调；只释放带 token 的文件副本。"""
+        token = message.get("token")
+        if token:
+            self.discard(token)
+
+    @staticmethod
+    def _read_into_memory(source, size):
+        """把文件读进内存；超过单个文件上限时返回 None。"""
+        if size > OUTBOX_ITEM_LIMIT:
+            return None
+        with source.open("rb") as fp:
+            data = fp.read(OUTBOX_ITEM_LIMIT + 1)
+        return None if len(data) > OUTBOX_ITEM_LIMIT else data
 
 
 class ChatLog:
@@ -1178,11 +1246,14 @@ class ChatLog:
     MAX_MESSAGES = 400  # 防止长时间运行后内存无限增长
     SENDERS = ("phone", "computer")
 
-    def __init__(self):
+    def __init__(self, on_discard=None):
         self._lock = threading.Lock()
         self._messages = []
         self._next_id = 1
         self._version = 1
+        # 消息被丢弃（清空或超出上限）时回调，用于释放消息关联的内存副本。
+        # 回调在持有 self._lock 期间执行，因此回调里不能再调用 ChatLog 方法。
+        self._on_discard = on_discard
 
     # ---- 写入（调用 _append 前必须持有锁）----
     def _append(self, message):
@@ -1192,8 +1263,16 @@ class ChatLog:
         self._messages.append(message)
         overflow = len(self._messages) - self.MAX_MESSAGES
         if overflow > 0:
+            self._discard(self._messages[:overflow])
             del self._messages[:overflow]
         return dict(message)
+
+    def _discard(self, messages):
+        """通知外部释放这些消息占用的资源（调用前必须持有锁）。"""
+        if self._on_discard is None:
+            return
+        for message in messages:
+            self._on_discard(message)
 
     def add_text(self, sender, text):
         """记录一条文本消息并返回副本；内容不合法时抛出异常。"""
@@ -1210,8 +1289,12 @@ class ChatLog:
                 {"kind": "text", "sender": sender, "source": "chat", "text": text}
             )
 
-    def add_file(self, sender, name, size, path=None, source="chat"):
-        """记录一条文件消息；文件本体已经保存在共享目录中。"""
+    def add_file(self, sender, name, size, path=None, source="chat", token=None):
+        """记录一条文件消息；文件本体不在聊天记录里。
+
+        电脑发出的文件带 token，下载时读内存副本；对方设备上传的文件保存在
+        共享目录里，按文件名下载。
+        """
         if sender not in self.SENDERS:
             raise ValueError("未知的发送方")
         if not name:
@@ -1225,12 +1308,14 @@ class ChatLog:
                     "name": name,
                     "size": int(size),
                     "path": str(path) if path else str(SHARED_DIR / name),
+                    "token": token,
                 }
             )
 
     def clear(self):
         """清空当前会话的聊天记录，只影响内存。"""
         with self._lock:
+            self._discard(self._messages)
             self._messages.clear()
             self._version += 1
             return self._version
@@ -1251,10 +1336,9 @@ class ChatLog:
             ]
             return self._version, messages
 
-    # ---- 共享目录 ----
 
-
-CHAT_LOG = ChatLog()
+OUTBOX = Outbox()
+CHAT_LOG = ChatLog(on_discard=OUTBOX.discard_message)
 
 
 class FileTransferServer(ThreadingHTTPServer):
@@ -1278,6 +1362,8 @@ class App:
     QR_SIZE = 256
     SEND_PLACEHOLDER = "输入要发送到对方设备的文本，Ctrl+Enter 发送"
     CHAT_POLL_MS = 700
+    MIN_WIDTH = 720  # 主窗口的最小宽度（显式指定，避免不同平台字体差异导致布局被挤扁）
+    MIN_HEIGHT = 800  # 主窗口的最小高度
 
     def __init__(self):
         self.server = None
@@ -1296,8 +1382,19 @@ class App:
         self.build_ui()
         self.refresh_address()
         self.start_chat_polling()
+        self.set_minimum_size()
+
+    def set_minimum_size(self):
+        """显式设置主窗口的最小尺寸。
+
+        MIN_WIDTH / MIN_HEIGHT 给出与字体无关的稳定下限；再和界面内容的自然
+        尺寸取较大值，避免某些平台上字体更大时最小尺寸小于内容本身，导致
+        窗口无法完整显示二维码、按钮或状态栏。
+        """
         self.root.update_idletasks()
-        self.root.minsize(self.root.winfo_reqwidth(), self.root.winfo_reqheight())
+        width = max(self.MIN_WIDTH, self.root.winfo_reqwidth()) + 200
+        height = max(self.MIN_HEIGHT, self.root.winfo_reqheight())
+        self.root.minsize(width, height)
 
     def set_window_icon(self):
         """使用项目中的 favicon.ico 设置窗口图标。"""
@@ -2066,7 +2163,11 @@ class App:
 
     # ---- 文件 ----
     def send_file_to_phone(self):
-        """把本机文件放进共享目录，并在聊天窗口中显示为发出的消息。"""
+        """通过聊天窗口把本机文件发给对方设备。
+
+        文件不会复制进共享目录：小文件读成内存副本，大文件在对方下载时按
+        原路径分块读取，因此切换共享目录不会影响已经发出的文件。
+        """
         selected = filedialog.askopenfilenames(
             parent=self.root,
             title="选择要发送到对方设备的文件",
@@ -2079,12 +2180,11 @@ class App:
         for raw in selected:
             source = Path(raw)
             try:
-                target = place_shared_file(source)
-                stat = target.stat()
+                token, size = OUTBOX.add(source.name, source)
             except OSError as exc:
                 failures.append(f"{source.name}：{exc}")
                 continue
-            CHAT_LOG.add_file("computer", target.name, stat.st_size, target)
+            CHAT_LOG.add_file("computer", source.name, size, source, token=token)
             sent += 1
 
         if failures:
@@ -2208,6 +2308,242 @@ class App:
         self.root.destroy()
 
 
+def multipart_boundary(content_type):
+    """从 Content-Type 里取出 multipart 分隔符；不是 multipart 时返回 None。"""
+    if "boundary=" not in content_type:
+        return None
+    raw = (
+        b"Content-Type: "
+        + content_type.encode("latin-1", "replace")
+        + b"\r\nMIME-Version: 1.0\r\n\r\n"
+    )
+    try:
+        headers = BytesParser(policy=default).parsebytes(raw, headersonly=True)
+    except MessageError:
+        return None
+    if headers.get_content_maintype() != "multipart":
+        return None
+    boundary = headers.get_param("boundary")
+    if isinstance(boundary, tuple):  # RFC 2231 编码的参数
+        boundary = boundary[2]
+    if not isinstance(boundary, str) or not boundary:
+        return None
+    try:
+        return boundary.encode("ascii")
+    except UnicodeEncodeError:
+        return None
+
+
+def upload_target_name(filename):
+    """把浏览器提交的文件名清理成共享目录里可用的文件名。"""
+    # 浏览器可能提交 Unix 或 Windows 风格的路径。
+    filename = os.path.basename(filename.replace("\\", "/"))
+    # 移除空字节、控制字符，以及前后的点和空格。
+    filename = "".join(c for c in filename if ord(c) >= 0x20 and c != "\x7f")
+    return filename.strip(". ") or "uploaded_file"
+
+
+class LimitedBuffer:
+    """有大小上限的内存缓冲，写超了直接抛异常，避免被超大字段撑爆内存。"""
+
+    def __init__(self, limit):
+        self._limit = limit
+        self._buffer = io.BytesIO()
+
+    def write(self, data):
+        if self._buffer.tell() + len(data) > self._limit:
+            raise ValueError("内容过大")
+        return self._buffer.write(data)
+
+    def getvalue(self):
+        return self._buffer.getvalue()
+
+
+class MultipartPart:
+    """multipart/form-data 里的一个分段；正文需要调用方主动消费。"""
+
+    PLAIN_ENCODINGS = ("", "binary", "8bit", "7bit", "identity")
+
+    def __init__(self, reader, headers, header_bytes):
+        self.reader = reader
+        self.headers = headers
+        self.filename = headers.get_filename()
+        self.field_name = headers.get_param("name", header="content-disposition")
+        self.consumed = False
+        self._header_bytes = header_bytes
+
+    @property
+    def needs_decoding(self):
+        """分段是否使用 base64 / quoted-printable 等需要解码的编码。"""
+        encoding = self.headers.get("Content-Transfer-Encoding") or ""
+        return encoding.strip().lower() not in self.PLAIN_ENCODINGS
+
+    def stream(self, sink):
+        """把正文按块写入 sink，返回写入的字节数。"""
+        self.consumed = True
+        return self.reader.stream_payload(sink)
+
+    def payload(self, limit):
+        """把正文读进内存并按需解码；只用于体积受限的字段和编码分段。
+
+        读到的字节数超过 limit 时抛出 ValueError。
+        """
+        buffer = LimitedBuffer(limit)
+        self.stream(buffer)
+        raw = buffer.getvalue()
+        if not self.needs_decoding:
+            return raw
+        message = BytesParser(policy=default).parsebytes(
+            self._header_bytes + b"\r\n\r\n" + raw
+        )
+        return message.get_payload(decode=True) or b""
+
+    def text(self, limit):
+        """把正文当文本读取，无法解码的字节用替换字符处理。"""
+        return self.payload(limit).decode("utf-8", "replace")
+
+
+class MultipartReader:
+    """流式 multipart/form-data 解析器。
+
+    只有分段头部和上限内的字段会读进内存，文件正文由调用方按块写入磁盘，
+    因此请求体再大，内存占用也基本恒定。分隔符可能跨在两个数据块之间，
+    所以每次都会在缓冲区末尾留出一段，等后续数据补齐后再匹配。
+    """
+
+    CHUNK = 256 * 1024
+    MAX_HEADER = 16 * 1024
+
+    def __init__(self, rfile, length, boundary):
+        self.truncated = False  # 请求体提前结束（上传被中断）
+        self._rfile = rfile
+        self._remaining = max(0, length)
+        self._delimiter = b"--" + boundary
+        self._needle = b"\r\n" + self._delimiter
+        self._buffer = b""
+        self._eof = False
+
+    # ---- 缓冲 ----
+    def _fill(self):
+        """再读一块数据；返回是否读到新数据。"""
+        if self._eof or self._remaining <= 0:
+            return False
+        chunk = self._rfile.read(min(self.CHUNK, self._remaining))
+        if not chunk:
+            self._eof = True
+            return False
+        self._remaining -= len(chunk)
+        self._buffer += chunk
+        return True
+
+    def _drop(self, count):
+        self._buffer = self._buffer[count:]
+
+    def _need(self, size):
+        while len(self._buffer) < size and self._fill():
+            pass
+        return len(self._buffer) >= size
+
+    def drain(self):
+        """读掉请求体里剩下的数据，避免连接中残留未读内容。"""
+        while self._remaining > 0:
+            chunk = self._rfile.read(min(self.CHUNK, self._remaining))
+            if not chunk:
+                self._eof = True
+                return
+            self._remaining -= len(chunk)
+
+    # ---- 分段 ----
+    def parts(self):
+        """依次产生每个分段，并在进入下一个分段前丢弃未消费的正文。"""
+        while True:
+            part = self._next_part()
+            if part is None:
+                return
+            yield part
+            if not part.consumed:
+                self.stream_payload(None)
+
+    def _next_part(self):
+        if not self._at_boundary():
+            return None
+        self._drop(len(self._delimiter))
+        if not self._need(2):
+            return None
+        if self._buffer[:2] == b"--":
+            return None  # 结束标记，后面只剩结尾数据
+        if self._buffer[:2] != b"\r\n":
+            self.truncated = True
+            return None
+        self._drop(2)
+        headers, header_bytes = self._read_headers()
+        if headers is None:
+            return None
+        return MultipartPart(self, headers, header_bytes)
+
+    def _at_boundary(self):
+        """把缓冲区推进到分隔符处（丢弃前面的内容）；数据不足时记为中断。"""
+        keep = len(self._needle) - 1
+        while True:
+            if self._buffer.startswith(self._delimiter):
+                return True
+            index = self._buffer.find(self._needle)
+            if index >= 0:
+                self._drop(index + 2)
+                return True
+            if len(self._buffer) > keep:
+                self._drop(len(self._buffer) - keep)
+            if not self._fill():
+                self.truncated = True
+                return False
+
+    def _read_headers(self):
+        """读取分段头部（到空行为止），返回 (Message, 头部原始字节)。"""
+        while True:
+            index = self._buffer.find(b"\r\n\r\n")
+            if index >= 0:
+                raw = self._buffer[:index]
+                self._drop(index + 4)
+                return self._parse_headers(raw), raw
+            if len(self._buffer) > self.MAX_HEADER or not self._fill():
+                self.truncated = True
+                return None, b""
+
+    @staticmethod
+    def _parse_headers(raw):
+        try:
+            return BytesParser(policy=default).parsebytes(
+                raw + b"\r\n\r\n", headersonly=True
+            )
+        except MessageError:
+            return None
+
+    def stream_payload(self, sink):
+        """把当前分段的正文按块写入 sink（sink 为 None 时丢弃），返回字节数。"""
+        keep = len(self._needle) - 1
+        written = 0
+        while True:
+            index = self._buffer.find(self._needle)
+            if index >= 0:
+                written += self._write(sink, self._buffer[:index])
+                self._drop(index + 2)
+                return written
+            if len(self._buffer) > keep:
+                cut = len(self._buffer) - keep
+                written += self._write(sink, self._buffer[:cut])
+                self._drop(cut)
+            if not self._fill():
+                self.truncated = True
+                return written
+
+    @staticmethod
+    def _write(sink, data):
+        if sink is None:
+            return 0
+        written = sink.write(data)
+        return len(data) if written is None else written
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         """Keep requests working when a windowed build has no stderr stream."""
@@ -2309,6 +2645,10 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(200, self.render_files_page())
             return
 
+        if request_path.startswith("/outbox/"):
+            self.serve_outbox_file(request_path[len("/outbox/") :])
+            return
+
         if not request_path.startswith("/files/"):
             self.send_error(404)
             return
@@ -2336,6 +2676,23 @@ class Handler(BaseHTTPRequestHandler):
             },
         )
 
+    def send_download_headers(self, name, size):
+        """发送"另存为"响应头；文件名用 RFC 5987 形式，避免中文乱码。"""
+        content_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(size))
+        self.send_header(
+            "Content-Disposition",
+            f"attachment; filename=\"download\"; filename*=UTF-8''{quote(name)}",
+        )
+        self.end_headers()
+
+    def stream_to_client(self, source):
+        """按块把内容写给客户端，不把整个文件读进内存。"""
+        while chunk := source.read(1024 * 1024):
+            self.wfile.write(chunk)
+
     def serve_shared_file(self, encoded_name):
         """只允许访问共享目录的直接子文件，避免 ../ 路径穿越。"""
         requested_name = unquote(encoded_name)
@@ -2352,25 +2709,44 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         try:
-            size = target.stat().st_size
-            content_type = (
-                mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-            )
-            self.send_response(200)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(size))
-            self.send_header(
-                "Content-Disposition",
-                f"attachment; filename=\"download\"; filename*=UTF-8''{quote(target.name)}",
-            )
-            self.end_headers()
+            self.send_download_headers(target.name, target.stat().st_size)
             with target.open("rb") as source:
-                while chunk := source.read(1024 * 1024):
-                    self.wfile.write(chunk)
+                self.stream_to_client(source)
         except (BrokenPipeError, ConnectionResetError):
             pass
         except OSError:
             self.send_error(404)
+
+    def serve_outbox_file(self, encoded_token):
+        """把电脑发出的文件副本发给对方设备。
+
+        内存副本直接发送；大文件按登记时的原路径读取，与共享目录无关。
+        """
+        item = OUTBOX.get(unquote(encoded_token))
+        if item is None:
+            self.reply_error(404, "这个文件的临时副本已失效，请让对方重新发送。")
+            return
+
+        data = item["data"]
+        if data is not None:
+            self.send_download_headers(item["name"], len(data))
+            self.stream_to_client(io.BytesIO(data))
+            return
+
+        try:
+            source = item["path"].open("rb")
+        except OSError:
+            self.reply_error(410, "原文件已被移动或删除，请让对方重新发送。")
+            return
+        try:
+            with source:
+                size = os.fstat(source.fileno()).st_size
+                self.send_download_headers(item["name"], size)
+                self.stream_to_client(source)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except OSError:
+            pass  # 响应头可能已经发出，这里只能结束本次传输
 
     # ---- POST ----
     def do_POST(self):
@@ -2429,7 +2805,11 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def handle_upload_post(self):
-        """处理网页表单：既接收文件，也接收没有脚本时提交的文本。"""
+        """处理网页表单：既接收文件，也接收没有脚本时提交的文本。
+
+        请求体按块解析、边收边写盘，上传再大内存占用也基本恒定。没有脚本时
+        提交的整页表单仍然通过 303 回到聊天页面。
+        """
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -2443,35 +2823,41 @@ class Handler(BaseHTTPRequestHandler):
             self.reply_error(413, "上传内容总大小不能超过 2 GiB")
             return
 
-        body = self.rfile.read(length)
-        raw = (
-            b"Content-Type: "
-            + self.headers.get("Content-Type", "").encode()
-            + b"\r\nMIME-Version: 1.0\r\n\r\n"
-            + body
-        )
-        message = BytesParser(policy=default).parsebytes(raw)
+        boundary = multipart_boundary(self.headers.get("Content-Type", ""))
+        if not boundary:
+            self.reply_error(400, "上传内容格式不正确")
+            return
 
         created = []
         errors = []
-        for part in message.iter_parts():
-            filename = part.get_filename()
-            if filename:
-                try:
-                    created.append(self.save_uploaded_file(part, filename))
-                except OSError as exc:
-                    errors.append(f"{filename}：{exc}")
-                continue
+        reader = MultipartReader(self.rfile, length, boundary)
+        try:
+            for part in reader.parts():
+                if part.filename:
+                    try:
+                        created.append(self.save_uploaded_file(part))
+                    except (OSError, ValueError) as exc:
+                        errors.append(f"{part.filename}：{exc}")
+                    continue
 
-            if part.get_param("name", header="content-disposition") != "text":
-                continue
-            text = (part.get_payload(decode=True) or b"").decode("utf-8", "replace")
-            if not text.strip():
-                continue
-            try:
-                created.append(CHAT_LOG.add_text("phone", text))
-            except (TypeError, ValueError) as exc:
-                errors.append(str(exc))
+                if part.field_name != "text":
+                    continue
+                try:
+                    text = part.text(MAX_TEXT_BODY)
+                except ValueError as exc:
+                    errors.append(str(exc))
+                    continue
+                if not text.strip():
+                    continue
+                try:
+                    created.append(CHAT_LOG.add_text("phone", text))
+                except (TypeError, ValueError) as exc:
+                    errors.append(str(exc))
+        finally:
+            reader.drain()
+
+        if reader.truncated:
+            errors.append("上传中断，内容不完整")
 
         if self.wants_json():
             if not created and errors:
@@ -2497,22 +2883,28 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
-    def save_uploaded_file(self, part, filename):
-        """保存上传的文件到共享目录，并记录一条聊天消息。"""
-        # 浏览器可能提交 Unix 或 Windows 风格的路径。
-        filename = os.path.basename(filename.replace("\\", "/"))
-        # 移除空字节、控制字符，以及前后的点和空格。
-        filename = "".join(c for c in filename if ord(c) >= 0x20 and c != "\x7f")
-        filename = filename.strip(". ")
-        if not filename:
-            filename = "uploaded_file"
+    def save_uploaded_file(self, part):
+        """把一个上传分段流式写入共享目录，并记录一条聊天消息。"""
+        filename = upload_target_name(part.filename)
         stem = Path(filename).stem or "uploaded_file"
         suffix = Path(filename).suffix
         # 限制 stem 长度，防止超出文件系统的 255 字节限制。
         if len(stem.encode("utf-8")) > 180:
             stem = stem.encode("utf-8")[:180].decode("utf-8", "ignore")
         target = SHARED_DIR / f"{stem}_{uuid.uuid4().hex[:8]}{suffix}"
-        target.write_bytes(part.get_payload(decode=True) or b"")
+        try:
+            if part.needs_decoding:
+                # base64 / quoted-printable 必须先解码，只能在内存里处理，因此设上限
+                target.write_bytes(part.payload(MAX_ENCODED_PART))
+            else:
+                with target.open("wb") as sink:
+                    part.stream(sink)
+            if part.reader.truncated:
+                raise ValueError("上传中断")
+        except (OSError, ValueError):
+            # 上传失败或中途断开：删掉只写了一半的文件，别让它出现在共享列表里
+            target.unlink(missing_ok=True)
+            raise
         return CHAT_LOG.add_file("phone", target.name, target.stat().st_size, target)
 
 
