@@ -132,6 +132,4 @@ uv run ruff check .
 
 ## License and copyright
 
-Except for `favicon.ico`, the source code and other project contents are released under the [Do What The Fuck You Want To Public License v2 (WTFPL)](https://www.wtfpl.net/). See [LICENSE](LICENSE).
-
-The copyright of `favicon.ico` belongs to [路过哒雪](https://space.bilibili.com/5561584). The icon is not covered by the WTFPL.
+This source code and other project contents are released under the [Do What The Fuck You Want To Public License v2 (WTFPL)](https://www.wtfpl.net/). See [LICENSE](LICENSE).
