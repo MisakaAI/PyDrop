@@ -5,8 +5,10 @@ import io
 import json
 import mimetypes
 import os
+import secrets
 import shutil
 import socket
+import string
 import subprocess
 import sys
 import threading
@@ -16,6 +18,7 @@ import uuid
 from email.errors import MessageError
 from email.parser import BytesParser
 from email.policy import default
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tkinter import filedialog, messagebox
@@ -551,10 +554,13 @@ PAGE_HEAD = """<!doctype html>
       return `${value.toFixed(unit === "B" ? 0 : 1)} ${unit}`;
     }
 
+    const deviceCode = "__DEVICE_CODE__";
+
     function clockText(seconds) {
       const date = new Date((Number(seconds) || 0) * 1000);
       if (Number.isNaN(date.getTime())) return "";
-      return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      return [date.getHours(), date.getMinutes(), date.getSeconds()]
+        .map(value => String(value).padStart(2, "0")).join(":");
     }
 
     function scrollToEnd(force) {
@@ -563,7 +569,7 @@ PAGE_HEAD = """<!doctype html>
     }
 
     function messageElement(message) {
-      const outgoing = message.sender === "phone";
+      const outgoing = message.sender === "phone" && message.device_code === deviceCode;
       const item = document.createElement("li");
       item.className = "message " + (outgoing ? "out" : "in");
       item.dataset.id = message.id;
@@ -571,7 +577,9 @@ PAGE_HEAD = """<!doctype html>
       const meta = document.createElement("p");
       meta.className = "message-meta";
       const who = document.createElement("span");
-      who.textContent = `${outgoing ? "本机" : "对方设备"} · ${clockText(message.time)}`;
+      const name = outgoing ? "本机" : message.sender === "computer"
+        ? "电脑" : `设备 (${message.device_code})`;
+      who.textContent = `${name} ${clockText(message.time)}`;
       meta.append(who);
 
       if (message.kind === "file") {
@@ -1134,14 +1142,24 @@ def file_url(message):
     return "/files/" + quote(message["name"])
 
 
-def message_html(message):
+def message_html(message, device_code=None):
     """把一条聊天记录渲染成网页中的气泡（网页端就是手机端）。"""
     payload = public_message(message)
-    outgoing = payload["sender"] == "phone"
+    outgoing = (
+        payload["sender"] == "phone" and payload.get("device_code") == device_code
+    )
     side = "out" if outgoing else "in"
-    clock = time.strftime("%H:%M", time.localtime(payload.get("time") or time.time()))
-    who = "本机" if outgoing else "电脑"
-    meta = f"<span>{who} · {clock}</span>"
+    clock = time.strftime(
+        "%H:%M:%S", time.localtime(payload.get("time") or time.time())
+    )
+    who = (
+        "本机"
+        if outgoing
+        else "电脑"
+        if payload["sender"] == "computer"
+        else f"设备 ({payload['device_code']})"
+    )
+    meta = f"<span>{html.escape(who)} {clock}</span>"
     if payload["kind"] == "file":
         href = html.escape(payload["url"], quote=True)
         body = (
@@ -1273,7 +1291,7 @@ class ChatLog:
         for message in messages:
             self._on_discard(message)
 
-    def add_text(self, sender, text):
+    def add_text(self, sender, text, device_code=None):
         """记录一条文本消息并返回副本；内容不合法时抛出异常。"""
         if sender not in self.SENDERS:
             raise ValueError("未知的发送方")
@@ -1285,10 +1303,18 @@ class ChatLog:
             raise ValueError(f"文本不能超过 {MAX_TEXT_LENGTH} 个字符")
         with self._lock:
             return self._append(
-                {"kind": "text", "sender": sender, "source": "chat", "text": text}
+                {
+                    "kind": "text",
+                    "sender": sender,
+                    "source": "chat",
+                    "text": text,
+                    "device_code": device_code,
+                }
             )
 
-    def add_file(self, sender, name, size, path=None, source="chat", token=None):
+    def add_file(
+        self, sender, name, size, path=None, source="chat", token=None, device_code=None
+    ):
         """记录一条文件消息；文件本体不在聊天记录里。
 
         电脑发出的文件带 token，下载时读内存副本；对方设备上传的文件保存在
@@ -1308,6 +1334,7 @@ class ChatLog:
                     "size": int(size),
                     "path": str(path) if path else str(SHARED_DIR / name),
                     "token": token,
+                    "device_code": device_code,
                 }
             )
 
@@ -1338,6 +1365,38 @@ class ChatLog:
 
 OUTBOX = Outbox()
 CHAT_LOG = ChatLog(on_discard=OUTBOX.discard_message)
+
+
+class DeviceSessions:
+    """浏览器会话令牌与五位设备识别码，仅保存在本次运行的内存中。"""
+
+    COOKIE_NAME = "pydrop_device"
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._sessions = {}
+        self._codes = set()
+
+    def resolve(self, token):
+        with self._lock:
+            if token in self._sessions:
+                return token, self._sessions[token], False
+            alphabet = string.ascii_uppercase + string.digits
+            while True:
+                code = "".join(secrets.choice(alphabet) for _ in range(5))
+                if (
+                    code not in self._codes
+                    and any(c in string.ascii_uppercase for c in code)
+                    and any(c in string.digits for c in code)
+                ):
+                    break
+            token = secrets.token_urlsafe(32)
+            self._sessions[token] = code
+            self._codes.add(code)
+            return token, code, True
+
+
+DEVICE_SESSIONS = DeviceSessions()
 
 
 class FileTransferServer(ThreadingHTTPServer):
@@ -1441,7 +1500,6 @@ class App:
             "primary_active": "#1d4ed8",
             "border": "#dce4ef",
             "chat": "#f7f9fc",
-            "bubble_in": "#e9eff8",
         }
         family = tkfont.nametofont("TkDefaultFont").actual("family")
         self.body_font = (family, 10)
@@ -1629,10 +1687,10 @@ class App:
             width=34,
             wrap="word",
             state="disabled",
-            cursor="arrow",
+            cursor="xterm",
             font=self.body_font,
-            fg=colors["text"],
-            bg=colors["chat"],
+            fg="#000000",
+            bg="#ffffff",
             relief="flat",
             borderwidth=0,
             highlightthickness=0,
@@ -1640,7 +1698,7 @@ class App:
             highlightcolor=colors["chat"],
             selectborderwidth=0,
             selectbackground="#bfdbfe",
-            selectforeground=colors["text"],
+            selectforeground="#000000",
             padx=8,
             pady=8,
         )
@@ -1833,72 +1891,39 @@ class App:
 
     # ---- 聊天窗口 ----
     def configure_chat_tags(self):
-        """用文本标签模拟聊天气泡：左侧是收到的，右侧是发出的。"""
-        colors = self.colors
+        """传统聊天记录：标题着色，正文黑色，全部左对齐。"""
         box = self.chat_box
-        # 选中文字只改背景色，不画任何描边
         box.tag_configure("sel", borderwidth=0, relief="flat")
         box.tag_configure(
             "placeholder",
-            foreground=colors["muted"],
+            foreground=self.colors["muted"],
             font=self.small_font,
             justify="left",
             spacing1=8,
-            lmargin1=4,
-            lmargin2=4,
         )
-        box.tag_configure(
-            "in_meta",
-            foreground=colors["muted"],
-            font=self.small_font,
-            justify="left",
-            spacing1=6,
-        )
-        box.tag_configure(
-            "out_meta",
-            foreground=colors["muted"],
-            font=self.small_font,
-            justify="right",
-            spacing1=6,
-        )
-        box.tag_configure(
-            "in",
-            background=colors["bubble_in"],
-            foreground=colors["text"],
-            font=self.body_font,
-            justify="left",
-            spacing1=4,
-            spacing3=4,
-        )
-        box.tag_configure(
-            "out",
-            background=colors["primary"],
-            foreground="#ffffff",
-            font=self.body_font,
-            justify="right",
-            spacing1=4,
-            spacing3=4,
-        )
-        box.tag_configure(
-            "in_file",
-            background=colors["bubble_in"],
-            foreground=colors["primary"],
-            font=self.body_font,
-            justify="left",
-            underline=True,
-            spacing1=4,
-            spacing3=4,
-        )
-        box.tag_configure(
-            "out_file",
-            background=colors["primary"],
-            foreground="#ffffff",
-            font=self.body_font,
-            justify="right",
-            underline=True,
-            spacing1=4,
-            spacing3=4,
-        )
+        for side, color in (("in", "#2927f5"), ("out", "#519567")):
+            box.tag_configure(
+                f"{side}_meta",
+                foreground=color,
+                font=self.body_font,
+                justify="left",
+                spacing1=0,
+            )
+            box.tag_configure(
+                side,
+                foreground="#000000",
+                font=self.body_font,
+                justify="left",
+                spacing1=0,
+                spacing3=0,
+            )
+            box.tag_configure(
+                f"{side}_file",
+                foreground="#000000",
+                font=self.body_font,
+                justify="left",
+                underline=True,
+            )
 
     def start_chat_polling(self):
         """首次绘制聊天窗口，并开始轮询对方设备发来的消息。"""
@@ -1977,28 +2002,27 @@ class App:
         tag = f"msg_{message['id']}"
         self.chat_message_tags[tag] = message
         stamp = time.strftime(
-            "%H:%M", time.localtime(message.get("time") or time.time())
+            "%H:%M:%S", time.localtime(message.get("time") or time.time())
         )
-        who = "电脑" if outgoing else "设备"
-        box.insert("end", f"{who} · {stamp}\n", (f"{side}_meta", tag))
+        who = "本机" if outgoing else f"设备 ({message['device_code']})"
+        box.insert("end", f"{who} {stamp}\n", (f"{side}_meta", tag))
         if message["kind"] == "file":
             size = format_size(message.get("size", 0))
             file_tag = f"file_{message['id']}"
-            # 首尾空格充当气泡内边距，让文字不贴着背景边缘
             box.insert(
                 "end",
-                f"  [文件] {message['name']}（{size}）点击打开  \n",
+                f"[文件] {message['name']}（{size}）点击打开\n",
                 (f"{side}_file", tag, file_tag),
             )
             path = message.get("path")
             if path:
                 self.chat_file_tags[file_tag] = path
         else:
-            box.insert("end", self.pad_bubble(message["text"]) + "\n", (side, tag))
+            box.insert("end", message["text"] + "\n", (side, tag))
         box.insert("end", "\n", (tag,))
 
     def file_path_at(self, x, y):
-        """返回指定位置的文件路径；不在文件气泡上时返回 None。"""
+        """返回指定位置的文件路径；不在文件文字上时返回 None。"""
         try:
             names = self.chat_box.tag_names(self.chat_box.index(f"@{x},{y}"))
         except tk.TclError:
@@ -2031,6 +2055,12 @@ class App:
         self.chat_box.bind(
             "<Command-c>", lambda _event: self.copy_widget_selection(self.chat_box)
         )
+        for sequence in ("<Control-a>", "<Command-a>"):
+            self.chat_box.bind(sequence, self.select_all_chat)
+
+    def select_all_chat(self, _event=None):
+        self.select_all_text(self.chat_box)
+        return "break"
 
     def popup_chat_menu(self, event):
         menu = self.chat_menu
@@ -2093,17 +2123,12 @@ class App:
         return None
 
     def on_chat_motion(self, event):
-        cursor = "hand2" if self.file_path_at(event.x, event.y) else "arrow"
+        cursor = "hand2" if self.file_path_at(event.x, event.y) else "xterm"
         if self.chat_box.cget("cursor") != cursor:
             self.chat_box.configure(cursor=cursor)
 
     def on_chat_leave(self, _event=None):
-        self.chat_box.configure(cursor="arrow")
-
-    @staticmethod
-    def pad_bubble(text):
-        """给气泡文字加上左右内边距。"""
-        return "  " + text.replace("\n", "  \n  ") + "  "
+        self.chat_box.configure(cursor="xterm")
 
     def clear_chat(self):
         """清空当前会话的聊天记录（不影响磁盘上的文件）。"""
@@ -2545,6 +2570,25 @@ class MultipartReader:
 
 
 class Handler(BaseHTTPRequestHandler):
+    def device_code(self):
+        """使用会话 Cookie 关联轮询和上传，不依赖 IP 或短暂的 TCP 连接。"""
+        if not hasattr(self, "_device_code"):
+            cookie = SimpleCookie()
+            try:
+                cookie.load(self.headers.get("Cookie", ""))
+            except CookieError:
+                cookie = SimpleCookie()
+            item = cookie.get(DeviceSessions.COOKIE_NAME)
+            token, self._device_code, created = DEVICE_SESSIONS.resolve(
+                item.value if item else None
+            )
+            self._device_cookie = (
+                f"{DeviceSessions.COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Lax"
+                if created
+                else None
+            )
+        return self._device_code
+
     def log_message(self, format, *args):
         """Keep requests working when a windowed build has no stderr stream."""
         if sys.stderr is not None:
@@ -2560,6 +2604,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "SAMEORIGIN")
         self.send_header("Referrer-Policy", "same-origin")
+        if getattr(self, "_device_cookie", None):
+            self.send_header("Set-Cookie", self._device_cookie)
         for name, value in (headers or {}).items():
             self.send_header(name, value)
         self.end_headers()
@@ -2593,8 +2639,11 @@ class Handler(BaseHTTPRequestHandler):
         # 先替换标量占位符，最后插入消息，避免消息内容意外命中占位符
         page = PAGE_HEAD.replace("__CHAT_VERSION__", str(version))
         page = page.replace("__LAST_ID__", str(last_id))
+        device_code = self.device_code()
+        page = page.replace("__DEVICE_CODE__", device_code)
         return page.replace(
-            "__MESSAGES__", "".join(message_html(message) for message in messages)
+            "__MESSAGES__",
+            "".join(message_html(message, device_code) for message in messages),
         )
 
     def render_files_page(self):
@@ -2638,7 +2687,10 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if request_path == "/":
-            self.reply(200, self.render_chat_page())
+            self.device_code()
+            self.reply(
+                200, self.render_chat_page(), headers={"Cache-Control": "no-store"}
+            )
             return
 
         if request_path == "/files":
@@ -2764,6 +2816,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_text_post(self):
         """接收手机发送的文本，作为一条消息加入当前会话。"""
+        device_code = self.device_code()
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -2786,7 +2839,7 @@ class Handler(BaseHTTPRequestHandler):
 
         text = payload.get("text", "") if isinstance(payload, dict) else ""
         try:
-            message = CHAT_LOG.add_text("phone", text)
+            message = CHAT_LOG.add_text("phone", text, device_code=device_code)
         except (TypeError, ValueError) as exc:
             self.reply_json(400, {"ok": False, "error": str(exc)})
             return
@@ -2810,6 +2863,7 @@ class Handler(BaseHTTPRequestHandler):
         请求体按块解析、边收边写盘，上传再大内存占用也基本恒定。没有脚本时
         提交的整页表单仍然通过 303 回到聊天页面。
         """
+        device_code = self.device_code()
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -2850,7 +2904,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not text.strip():
                     continue
                 try:
-                    created.append(CHAT_LOG.add_text("phone", text))
+                    created.append(
+                        CHAT_LOG.add_text("phone", text, device_code=device_code)
+                    )
                 except (TypeError, ValueError) as exc:
                     errors.append(str(exc))
         finally:
@@ -2881,6 +2937,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(303)
         self.send_header("Location", "/")
         self.send_header("Content-Length", "0")
+        if getattr(self, "_device_cookie", None):
+            self.send_header("Set-Cookie", self._device_cookie)
         self.end_headers()
 
     def save_uploaded_file(self, part):
@@ -2905,7 +2963,13 @@ class Handler(BaseHTTPRequestHandler):
             # 上传失败或中途断开：删掉只写了一半的文件，别让它出现在共享列表里
             target.unlink(missing_ok=True)
             raise
-        return CHAT_LOG.add_file("phone", target.name, target.stat().st_size, target)
+        return CHAT_LOG.add_file(
+            "phone",
+            target.name,
+            target.stat().st_size,
+            target,
+            device_code=self.device_code(),
+        )
 
 
 if __name__ == "__main__":

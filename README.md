@@ -12,8 +12,10 @@ and lets you upload or download files from any browser on the same network.
 - Copy the access URL and refresh the address and QR code after switching networks
 - Upload files from a phone or another computer
 - Browse and download files from the shared directory
-- Chat-style window on both the phone page and the desktop app: messages from the
-  other device appear on the left, your own on the right
+- The phone uses chat bubbles; the desktop uses a classic style, read-only
+  transcript with selectable, copyable text
+- Each browser session gets a unique five-character uppercase letter and digit
+  device code, kept only in memory
 - Send text both ways; received text is selectable and copyable
 - Send files from the phone with the attach button in the chat input area, or from
   the desktop app with "Select files and send"
