@@ -58,7 +58,8 @@ Connect the phone and computer to the same Wi-Fi network,
 then scan the QR code shown in the PyDrop window.  
 You can also open the displayed URL manually.
 
-The default port is `12450`.  
+The operating system assigns an available port at each launch. The current URL
+appears in the app window and QR code.
 The default shared directory is the current user's `Downloads` folder (`~/Downloads`).  
 Files placed in that directory show up in the phone chat as messages from the  
 computer, and the **Shared files** button in the top bar lists every file in it.  
@@ -103,9 +104,8 @@ its target operating system and upload the files from `dist` to the correspondin
 
 ## Notes
 
-- Both devices must be on the same LAN, and the computer firewall must allow TCP port `12450` on the private/local network.
+- Both devices must be on the same LAN. Allow PyDrop to accept connections on the private/local network when prompted by the computer firewall.
 - PyDrop is intended for trusted local networks. It has no login or encryption layer.
-- To change the port, edit `PORT` in `main.py` before running or building the application.
 
 ## Development
 

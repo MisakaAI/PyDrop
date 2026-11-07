@@ -25,7 +25,6 @@ from urllib.parse import parse_qs, quote, unquote, urlsplit
 import segno
 
 HOST = "0.0.0.0"
-PORT = 12450
 
 # 这个目录内的文件会显示在手机网页上，并可直接下载。
 # Path.home() 会在 Windows 上返回当前用户目录，并使用平台原生路径格式。
@@ -1414,11 +1413,12 @@ class App:
 
     def start_server(self):
         try:
-            self.server = FileTransferServer((HOST, PORT), Handler)
+            # 端口 0 由系统分配可用端口；服务器会保留这个监听 socket。
+            self.server = FileTransferServer((HOST, 0), Handler)
         except OSError as exc:
             messagebox.showerror(
                 "启动失败",
-                f"无法监听端口 {PORT}。\n可能是端口已被占用，或被防火墙限制。\n\n{exc}",
+                f"无法启动局域网服务。\n请检查网络设置。\n\n{exc}",
                 parent=self.root,
             )
             self.root.destroy()
@@ -2202,7 +2202,7 @@ class App:
 
     def refresh_address(self):
         ip = local_ip()
-        self.url = f"http://{ip}:{PORT}" if ip else ""
+        self.url = f"http://{ip}:{self.server.server_port}" if ip else ""
         self.address.set(self.url or "未检测到局域网地址")
         self.copy_button.config(state="normal" if ip else "disabled")
         self.connection_label.config(
